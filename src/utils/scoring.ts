@@ -276,17 +276,21 @@ export function assessTerritories(data: {
 }
 
 // ── Sharing Rules ─────────────────────────────────────────────────────────────
-export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[] }): CategoryResult & { stats: any } {
+export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[]; allInternalGroupId?: string | null }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Sharing Rules';
 
   const ownerRules: any[] = data.ownerRules || [];
   const criteriaRules: any[] = data.criteriaRules || [];
+  const allInternalGroupId = data.allInternalGroupId || null;
   const totalRules = ownerRules.length + criteriaRules.length;
 
-  const allRulesTargetingAll = [...ownerRules, ...criteriaRules].filter(r =>
-    r.SharedTo?.Type === 'AllInternalUsers' || r.SharedTo?.Type === 'AllCustomerPortalUsers'
-  );
+  const allRulesTargetingAll = [...ownerRules, ...criteriaRules].filter(r => {
+    if (r.SharedToType === 'AllInternalUsers' || r.SharedToType === 'AllCustomerPortalUsers') return true;
+    if (allInternalGroupId && r.SharedToId === allInternalGroupId) return true;
+    if (r.SharedTo?.Type === 'AllInternalUsers') return true;
+    return false;
+  });
   if (allRulesTargetingAll.length > 0) {
     findings.push(createFinding(CAT, 'high',
       `${allRulesTargetingAll.length} Sharing Rule${allRulesTargetingAll.length > 1 ? 's Target' : ' Targets'} All Internal Users`,
@@ -508,7 +512,7 @@ export function assessGroupsQueues(data: {
   );
 
   const allInternalGroups = groups.filter(g =>
-    /all\s+internal/i.test(g.Name) || g.DeveloperName === 'AllInternalUsers'
+    g.DeveloperName === 'AllInternalUsers' || g.DeveloperName === 'AllCustomerPortalUsers'
   );
   if (allInternalGroups.length > 0) {
     findings.push(createFinding(CAT, 'high',
@@ -568,14 +572,14 @@ export function assessPermissionBypasses(data: {
       `${vadUsers.length} Users Have View All Data — Complete Sharing Bypass`,
       'View All Data grants complete visibility of all records in the org regardless of OWD, sharing rules, role hierarchy, or any other sharing mechanism. Each user with this permission can see every record in every object.',
       'Remove View All Data from all profiles and permission sets except system administrators who genuinely require full visibility. Replace with targeted View All object-level permissions where broader access is needed.',
-      { records: vadUsers.map(u => ({ name: u.Name, detail: u.Profile?.Name || 'Unknown Profile' })) }
+      { records: vadUsers.map(u => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${(u as any).grantSource || 'Profile'})` })) }
     ));
   } else if (vadUsers.length > 0) {
     findings.push(createFinding(CAT, 'high',
       `${vadUsers.length} User${vadUsers.length > 1 ? 's Have' : ' Has'} View All Data — Complete Sharing Bypass`,
       'View All Data bypasses all record-level security. Limit this permission to only those with a genuine need for complete data visibility.',
       'Review each user with View All Data. Remove the permission where it is not strictly required.',
-      { records: vadUsers.map(u => ({ name: u.Name, detail: u.Profile?.Name || 'Unknown Profile' })) }
+      { records: vadUsers.map(u => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${(u as any).grantSource || 'Profile'})` })) }
     ));
   }
 
@@ -584,14 +588,14 @@ export function assessPermissionBypasses(data: {
       `${madUsers.length} Users Have Modify All Data — Complete Sharing Bypass`,
       'Modify All Data allows users to create, edit, delete, and transfer ownership of all records in the org. This is one of the most powerful permissions in Salesforce and should be restricted to a tiny number of administrators.',
       'Remove Modify All Data from all but a very small number of system administrator accounts. Audit every profile and permission set granting this permission.',
-      { records: madUsers.map(u => ({ name: u.Name, detail: u.Profile?.Name || 'Unknown Profile' })) }
+      { records: madUsers.map(u => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${(u as any).grantSource || 'Profile'})` })) }
     ));
   } else if (madUsers.length > 0) {
     findings.push(createFinding(CAT, 'high',
       `${madUsers.length} User${madUsers.length > 1 ? 's Have' : ' Has'} Modify All Data — Complete Sharing Bypass`,
       'Modify All Data bypasses all record-level security for write operations. Limit this permission to only true system administrators.',
       'Review each user with Modify All Data. Remove the permission where it is not strictly required.',
-      { records: madUsers.map(u => ({ name: u.Name, detail: u.Profile?.Name || 'Unknown Profile' })) }
+      { records: madUsers.map(u => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${(u as any).grantSource || 'Profile'})` })) }
     ));
   }
 

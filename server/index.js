@@ -274,19 +274,22 @@ app.get('/api/assess/territories', requireAuth, async (req, res) => {
 app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [ownerRulesRes, criteriaRulesRes] = await Promise.all([
+    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes] = await Promise.all([
       safeToolingQuery(conn,
-        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedTo.Type " +
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM OwnerSharingRule LIMIT 2000"
       ),
       safeToolingQuery(conn,
-        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedTo.Type " +
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM CriteriaBasedSharingRule LIMIT 2000"
-      )
+      ),
+      safeQuery(conn, "SELECT Id FROM Group WHERE DeveloperName = 'AllInternalUsers' LIMIT 1")
     ]);
+    const allInternalGroupId = (allInternalGroupRes.records[0] || {}).Id || null;
     res.json({
       ownerRules: ownerRulesRes.records || [],
-      criteriaRules: criteriaRulesRes.records || []
+      criteriaRules: criteriaRulesRes.records || [],
+      allInternalGroupId
     });
   } catch (err) {
     console.error('Sharing rules assessment error:', err);
@@ -416,7 +419,11 @@ app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
 app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [vadUsersRes, madUsersRes, viewAllPermsRes, modifyAllPermsRes] = await Promise.all([
+    const [
+      vadProfileUsersRes, madProfileUsersRes,
+      vadPermSetUsersRes, madPermSetUsersRes,
+      viewAllPermsRes, modifyAllPermsRes
+    ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Profile.Name FROM User " +
         "WHERE IsActive = true AND Profile.PermissionsViewAllData = true LIMIT 500"
@@ -425,6 +432,16 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
         "SELECT Id, Name, Profile.Name FROM User " +
         "WHERE IsActive = true AND Profile.PermissionsModifyAllData = true LIMIT 500"
       ),
+      safeQuery(conn,
+        "SELECT AssigneeId, Assignee.Name, PermissionSet.Name FROM PermissionSetAssignment " +
+        "WHERE PermissionSet.PermissionsViewAllData = true AND Assignee.IsActive = true " +
+        "AND PermissionSet.IsOwnedByProfile = false LIMIT 500"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT AssigneeId, Assignee.Name, PermissionSet.Name FROM PermissionSetAssignment " +
+        "WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true " +
+        "AND PermissionSet.IsOwnedByProfile = false LIMIT 500"
+      ).catch(() => ({ records: [] })),
       safeToolingQuery(conn,
         "SELECT Id, SobjectType FROM ObjectPermissions WHERE PermissionsViewAllRecords = true LIMIT 500"
       ),
@@ -432,9 +449,32 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
         "SELECT Id, SobjectType FROM ObjectPermissions WHERE PermissionsModifyAllRecords = true LIMIT 500"
       )
     ]);
+
+    const vadUserMap = new Map();
+    for (const u of (vadProfileUsersRes.records || [])) {
+      vadUserMap.set(u.Id, { Id: u.Id, Name: u.Name, Profile: u.Profile, grantSource: 'Profile' });
+    }
+    for (const psa of (vadPermSetUsersRes.records || [])) {
+      const id = psa.AssigneeId;
+      if (!vadUserMap.has(id)) {
+        vadUserMap.set(id, { Id: id, Name: psa.Assignee?.Name || id, Profile: { Name: psa.PermissionSet?.Name || 'Permission Set' }, grantSource: 'Permission Set' });
+      }
+    }
+
+    const madUserMap = new Map();
+    for (const u of (madProfileUsersRes.records || [])) {
+      madUserMap.set(u.Id, { Id: u.Id, Name: u.Name, Profile: u.Profile, grantSource: 'Profile' });
+    }
+    for (const psa of (madPermSetUsersRes.records || [])) {
+      const id = psa.AssigneeId;
+      if (!madUserMap.has(id)) {
+        madUserMap.set(id, { Id: id, Name: psa.Assignee?.Name || id, Profile: { Name: psa.PermissionSet?.Name || 'Permission Set' }, grantSource: 'Permission Set' });
+      }
+    }
+
     res.json({
-      viewAllDataUsers: vadUsersRes.records || [],
-      modifyAllDataUsers: madUsersRes.records || [],
+      viewAllDataUsers: Array.from(vadUserMap.values()),
+      modifyAllDataUsers: Array.from(madUserMap.values()),
       viewAllObjectPerms: viewAllPermsRes.records || [],
       modifyAllObjectPerms: modifyAllPermsRes.records || []
     });
