@@ -226,24 +226,6 @@ export const LoginPage: React.FC = () => {
               </button>
             </form>
 
-            <button
-              type="button"
-              onClick={() => navigate('/dashboard', { state: { demo: true } })}
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: '1px solid #d1d5db',
-                color: '#6b7280',
-                padding: '10px',
-                borderRadius: '7px',
-                fontSize: '0.85rem',
-                cursor: 'pointer',
-                marginTop: '10px',
-              }}
-            >
-              View Demo Dashboard
-            </button>
-
             <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#9ca3af', textAlign: 'center' }}>
               Read-only OAuth 2.0 · No data stored · Session only
             </div>

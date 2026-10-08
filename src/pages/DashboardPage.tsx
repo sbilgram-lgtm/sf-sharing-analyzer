@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { CategoryPanel } from '../components/CategoryPanel';
 import { RemediationRoadmap } from '../components/RemediationRoadmap';
 import {
@@ -16,13 +16,6 @@ import {
 } from '../utils/scoring';
 import { AssessmentResult } from '../types/assessment';
 import { generatePDFReport } from '../utils/reportGenerator';
-import {
-  MOCK_ORG, MOCK_OWD_DATA, MOCK_ROLE_DATA, MOCK_TERRITORY_DATA,
-  MOCK_SHARING_RULES_DATA, MOCK_MANUAL_SHARING_DATA, MOCK_APEX_SHARING_DATA,
-  MOCK_RECORD_TEAMS_DATA, MOCK_GROUPS_QUEUES_DATA, MOCK_PERMISSION_BYPASSES_DATA,
-  MOCK_IMPLICIT_SHARING_DATA, MOCK_EXTERNAL_ACCESS_DATA
-} from '../utils/mockData';
-
 type ActiveView = 'findings' | 'inventory';
 
 function scoreColor(score: number): string {
@@ -41,67 +34,14 @@ export const DashboardPage: React.FC = () => {
   const [selectedSeverity, setSelectedSeverity] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('findings');
   const navigate = useNavigate();
-  const location = useLocation();
-  const isDemo = (location.state as any)?.demo === true;
 
   useEffect(() => {
-    if (isDemo) {
-      runDemoAssessment();
-      return;
-    }
     getAuthStatus().then(status => {
       if (!status.authenticated) navigate('/login');
       else runAssessment();
     }).catch(() => navigate('/login'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const runDemoAssessment = () => {
-    setLoading(true);
-    setProgress('Loading demo data...');
-    setTimeout(() => {
-      try {
-        const owdResult      = assessOwd(MOCK_OWD_DATA);
-        const roleResult     = assessRoleHierarchy(MOCK_ROLE_DATA);
-        const territoryResult= assessTerritories(MOCK_TERRITORY_DATA);
-        const sharingRulesResult = assessSharingRules(MOCK_SHARING_RULES_DATA);
-        const manualResult   = assessManualSharing(MOCK_MANUAL_SHARING_DATA);
-        const apexResult     = assessApexSharing(MOCK_APEX_SHARING_DATA);
-        const teamsResult    = assessRecordTeams(MOCK_RECORD_TEAMS_DATA);
-        const groupsResult   = assessGroupsQueues(MOCK_GROUPS_QUEUES_DATA);
-        const bypassResult   = assessPermissionBypasses(MOCK_PERMISSION_BYPASSES_DATA);
-        const implicitResult = assessImplicitSharing(MOCK_IMPLICIT_SHARING_DATA);
-        const externalResult = assessExternalAccess(MOCK_EXTERNAL_ACCESS_DATA);
-
-        const result = calculateOverallScore([
-          owdResult, roleResult, territoryResult, sharingRulesResult,
-          manualResult, apexResult, teamsResult, groupsResult,
-          bypassResult, implicitResult, externalResult
-        ]);
-
-        result.instanceUrl  = MOCK_ORG.instanceUrl;
-        result.orgId        = MOCK_ORG.orgId;
-        result.orgName      = MOCK_ORG.orgName;
-        result.orgType      = MOCK_ORG.orgType;
-        result.isSandbox    = MOCK_ORG.isSandbox;
-        result.instanceName = MOCK_ORG.instanceName;
-
-        result.owdInventory       = owdResult.inventory || [];
-        result.sharingRulesSummary = (sharingRulesResult as any).stats?.summary || [];
-        result.roleStats          = (roleResult as any).stats;
-        result.teamStats          = (teamsResult as any).stats;
-        result.bypassStats        = (bypassResult as any).stats;
-        result.territoryStats     = (territoryResult as any).stats;
-
-        setAssessment(result);
-      } catch (err: any) {
-        setError(err.message || 'Demo assessment failed');
-      } finally {
-        setLoading(false);
-        setProgress('');
-      }
-    }, 800);
-  };
 
   const runAssessment = async () => {
     setLoading(true);
@@ -239,21 +179,9 @@ export const DashboardPage: React.FC = () => {
               )}
             </div>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-              {isDemo && (
-                <span style={{ backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #f59e0b', padding: '4px 10px', borderRadius: '4px', fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em' }}>
-                  DEMO MODE
-                </span>
-              )}
-              {!isDemo && (
-                <button onClick={runAssessment} style={{ backgroundColor: 'white', border: '1px solid #1a56db', color: '#1a56db', padding: '9px 18px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
-                  Re-run Analysis
-                </button>
-              )}
-              {isDemo && (
-                <button onClick={() => navigate('/')} style={{ backgroundColor: 'white', border: '1px solid #6b7280', color: '#6b7280', padding: '9px 18px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
-                  ← Connect Your Org
-                </button>
-              )}
+              <button onClick={runAssessment} style={{ backgroundColor: 'white', border: '1px solid #1a56db', color: '#1a56db', padding: '9px 18px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+                Re-run Analysis
+              </button>
               <button onClick={() => assessment && generatePDFReport(assessment)} style={{ backgroundColor: '#1a56db', color: 'white', border: 'none', padding: '9px 18px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
                 Export PDF
               </button>
