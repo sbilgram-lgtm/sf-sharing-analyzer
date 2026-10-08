@@ -525,9 +525,10 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   }
 });
 
-// ── Serve React build in production ──────────────────────────────────────────
-if (isProduction) {
-  const buildPath = path.join(__dirname, '../build');
+// ── Serve React build ────────────────────────────────────────────────────────
+const buildPath = path.join(__dirname, '../build');
+const fs = require('fs');
+if (fs.existsSync(buildPath)) {
   app.use(express.static(buildPath));
   app.get('*', (req, res) => {
     res.sendFile(path.join(buildPath, 'index.html'));
