@@ -2,6 +2,8 @@
 
 A free, read-only web app that connects to any Salesforce org via OAuth and runs a comprehensive sharing and visibility architecture review — covering every layer of the Salesforce sharing model from OWD through Apex managed sharing.
 
+**Live App:** https://sf-sharing-analyzer-production.up.railway.app
+
 ## What It Does
 
 Produces two outputs in a single assessment run:
@@ -53,7 +55,7 @@ Produces two outputs in a single assessment run:
 In Setup → App Manager → New Connected App:
 
 - **OAuth Scopes:** `api`, `refresh_token`, `offline_access`
-- **Callback URL:** `https://your-railway-url.up.railway.app/auth/callback` (or `http://localhost:3001/auth/callback` for local dev)
+- **Callback URL:** `https://sf-sharing-analyzer-production.up.railway.app/auth/callback` (or `http://localhost:3001/auth/callback` for local dev)
 - **PKCE:** No additional configuration needed — supported automatically
 
 ### 2. Run Locally
