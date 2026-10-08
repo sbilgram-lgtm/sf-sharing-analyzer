@@ -280,22 +280,53 @@ export const LoginPage: React.FC = () => {
               textAlign: 'left' as const
             }}
           >
-            <span>How to Set Up Your Connected App</span>
+            <span>Setup Instructions</span>
             <span style={{ color: '#9ca3af' }}>{showSetup ? '▲' : '▼'}</span>
           </button>
           {showSetup && (
             <div style={{ padding: '0 28px 24px', borderTop: '1px solid #f3f4f6' }}>
-              <ol style={{ paddingLeft: '20px', margin: '16px 0', lineHeight: '2' }}>
-                <li>In Salesforce Setup, search for <strong>App Manager</strong> and click <strong>New Connected App</strong></li>
-                <li>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>), Contact Email</li>
-                <li>Check <strong>Enable OAuth Settings</strong></li>
-                <li>Set Callback URL to your app URL + <code>/auth/callback</code></li>
-                <li>Add OAuth Scopes: <strong>Access and manage your data (api)</strong> and <strong>Perform requests at any time (refresh_token)</strong></li>
-                <li>Save, wait 2–10 minutes for the app to activate</li>
-                <li>Copy the <strong>Consumer Key</strong> and <strong>Consumer Secret</strong> into the form above</li>
-              </ol>
-              <p style={{ fontSize: '0.85rem', color: '#9ca3af', margin: 0 }}>
-                The analyzer only requires read-only API access. No data is stored — all results live in your browser session.
+
+              {/* Option A — External Client App (Spring '25+) */}
+              <div style={{ marginTop: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', color: '#1a1a2e' }}>Option A — External Client App</h3>
+                  <span style={{ backgroundColor: '#dbeafe', color: '#1a56db', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>Spring '25+ Orgs</span>
+                </div>
+                <ol style={{ paddingLeft: '20px', margin: '0', lineHeight: '2', fontSize: '0.875rem', color: '#374151' }}>
+                  <li>In Setup, search for <strong>External Client Apps</strong> and click <strong>New External Client App</strong></li>
+                  <li>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>) and Contact Email</li>
+                  <li>Under <strong>OAuth Settings</strong>, enable OAuth and set Callback URL to:<br />
+                    <code style={{ fontSize: '0.8rem', backgroundColor: '#f3f4f6', padding: '1px 6px', borderRadius: '4px' }}>https://sf-sharing-analyzer-production.up.railway.app/auth/callback</code>
+                  </li>
+                  <li>Add OAuth Scopes: <strong>Manage user data via APIs (api)</strong> and <strong>Perform requests at any time (refresh_token, offline_access)</strong></li>
+                  <li>Save — no wait time required</li>
+                  <li>Open the app, go to <strong>OAuth Settings</strong> and copy the <strong>Client ID</strong> (Consumer Key) and <strong>Client Secret</strong> (Consumer Secret)</li>
+                </ol>
+              </div>
+
+              <div style={{ borderTop: '1px solid #f3f4f6', margin: '20px 0' }} />
+
+              {/* Option B — Connected App (All Orgs) */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <h3 style={{ margin: 0, fontSize: '0.95rem', color: '#1a1a2e' }}>Option B — Connected App</h3>
+                  <span style={{ backgroundColor: '#f0fdf4', color: '#16a34a', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>All Orgs</span>
+                </div>
+                <ol style={{ paddingLeft: '20px', margin: '0', lineHeight: '2', fontSize: '0.875rem', color: '#374151' }}>
+                  <li>In Setup, search for <strong>App Manager</strong> and click <strong>New Connected App</strong></li>
+                  <li>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>) and Contact Email</li>
+                  <li>Check <strong>Enable OAuth Settings</strong></li>
+                  <li>Set Callback URL to:<br />
+                    <code style={{ fontSize: '0.8rem', backgroundColor: '#f3f4f6', padding: '1px 6px', borderRadius: '4px' }}>https://sf-sharing-analyzer-production.up.railway.app/auth/callback</code>
+                  </li>
+                  <li>Add OAuth Scopes: <strong>Access and manage your data (api)</strong> and <strong>Perform requests at any time (refresh_token)</strong></li>
+                  <li>Save, wait 2–10 minutes for the app to activate</li>
+                  <li>Copy the <strong>Consumer Key</strong> and <strong>Consumer Secret</strong> into the form on the left</li>
+                </ol>
+              </div>
+
+              <p style={{ fontSize: '0.82rem', color: '#9ca3af', margin: '20px 0 0' }}>
+                Read-only API access only. No data is stored — all results live in your browser session.
               </p>
             </div>
           )}
