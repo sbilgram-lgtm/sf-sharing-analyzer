@@ -17,6 +17,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Objects Have External OWD Set to Public Read/Write', severity: 'critical' },
     { title: 'Objects Are Publicly Readable by External Users', severity: 'medium' },
     { title: 'Many Objects Have Public Read/Write Internal OWD', severity: 'medium' },
+    { title: 'OWD Chain Confusion — Parent Is Private, Child Is Controlled by Parent', severity: 'medium' },
   ],
   'Role Hierarchy': [
     { title: 'Role Hierarchy Exceeds 10 Levels Deep', severity: 'high' },
@@ -32,30 +33,38 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Multiple Active Territory Models Found', severity: 'high' },
     { title: 'Territories Have No Users Assigned', severity: 'medium' },
     { title: 'Territory Assignment Rules Are Inactive', severity: 'low' },
+    { title: 'Users Assigned to Excessive Number of Territories (50+)', severity: 'medium' },
+    { title: 'Territory Assignment Rules Lack Filtering Logic', severity: 'low' },
   ],
   'Sharing Rules': [
     { title: 'Sharing Rules Target All Internal Users', severity: 'high' },
     { title: 'Total Sharing Rules — Recalculation Risk (500+)', severity: 'high' },
     { title: 'Total Sharing Rules — Review for Redundancy (200+)', severity: 'medium' },
-    { title: 'Object Has High Number of Sharing Rules (50+)', severity: 'medium' },
+    { title: 'Object Has High Number of Sharing Rules (100+)', severity: 'medium' },
+    { title: 'Sharing Rules Are Redundant with Object\'s Public OWD', severity: 'low' },
   ],
   'Manual Sharing': [
     { title: 'Object Has Very High Manual Share Volume (10,000+)', severity: 'high' },
     { title: 'Object Has High Manual Share Volume (1,000+)', severity: 'medium' },
+    { title: 'Private OWD Object Relies Heavily on Manual Sharing (500+)', severity: 'medium' },
   ],
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high' },
     { title: 'Apex Classes Run Without Sharing Enforcement (5+)', severity: 'medium' },
     { title: 'Custom Apex Sharing Reasons Defined', severity: 'low' },
+    { title: 'Apex-Managed Share Records Exceed 5,000 on an Object', severity: 'medium' },
+    { title: 'Custom Sharing Reasons Have No Corresponding Active Apex Class', severity: 'low' },
   ],
   'Record Teams': [
     { title: 'Account Team Roles Grant Edit Access — Review Least Privilege', severity: 'medium' },
     { title: 'Opportunity Team Roles Grant Edit Access — Review Least Privilege', severity: 'medium' },
+    { title: 'Case Teams Active with Private Case OWD — Review Access Patterns', severity: 'medium' },
   ],
   'Groups & Queues': [
     { title: 'Public Groups Include All Internal Users', severity: 'high' },
     { title: 'Public Groups Have No Members', severity: 'low' },
     { title: 'Queues Have No Members — Work Items Cannot Be Assigned', severity: 'medium' },
+    { title: 'Queues Configured on Public OWD Objects — Redundant Access Mechanism', severity: 'low' },
   ],
   'Permission Bypasses': [
     { title: 'Many Users Have View All Data — Complete Sharing Bypass (5+)', severity: 'critical' },
@@ -64,6 +73,8 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Users Have Modify All Data — Complete Sharing Bypass', severity: 'high' },
     { title: 'View All Records Granted on Many Objects (10+)', severity: 'high' },
     { title: 'Modify All Records Granted on Many Objects (5+)', severity: 'high' },
+    { title: 'High Percentage of Active Users Have Org-Wide Sharing Bypass Permissions', severity: 'high' },
+    { title: 'Majority of Sharing Bypass Grants Are via Permission Sets — Harder to Audit', severity: 'medium' },
   ],
   'Implicit Sharing': [
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium' },
@@ -73,16 +84,25 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   'External & Guest Access': [
     { title: 'Objects Allow External Users to Create/Edit Records', severity: 'critical' },
     { title: 'Objects Are Accessible to External/Guest Users', severity: 'high' },
+    { title: 'Sharing Sets Grant Access to High-Volume Portal Users', severity: 'medium' },
   ],
 };
 
 const TOTAL_CHECKS = Object.values(CATEGORY_CHECKS).reduce((sum, arr) => sum + arr.length, 0);
+
+const SEV_COLOR: Record<Severity, { bg: string; text: string; dot: string }> = {
+  critical: { bg: '#fdf0ed', text: '#c0392b', dot: '#c0392b' },
+  high:     { bg: '#fef5e7', text: '#d35400', dot: '#d35400' },
+  medium:   { bg: '#fef9e7', text: '#f39c12', dot: '#f39c12' },
+  low:      { bg: '#eafaf1', text: '#27ae60', dot: '#27ae60' },
+};
 
 export const LoginPage: React.FC = () => {
   const [orgUrl, setOrgUrl] = useState('https://login.salesforce.com');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [showSetup, setShowSetup] = useState(false);
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -236,12 +256,51 @@ export const LoginPage: React.FC = () => {
             <h2 style={{ margin: '0 0 20px', fontSize: '1.1rem', color: '#1a1a2e' }}>What's Covered</h2>
 
             <div style={{ marginBottom: '16px' }}>
-              {Object.entries(CATEGORY_CHECKS).map(([cat, checks]) => (
-                <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6', fontSize: '0.85rem' }}>
-                  <span style={{ color: '#374151' }}>{cat}</span>
-                  <span style={{ color: '#6b7280', fontWeight: 500 }}>{checks.length} checks</span>
-                </div>
-              ))}
+              {Object.entries(CATEGORY_CHECKS).map(([cat, checks]) => {
+                const isExpanded = expandedCategory === cat;
+                return (
+                  <div key={cat} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                    <button
+                      onClick={() => setExpandedCategory(isExpanded ? null : cat)}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '7px 0',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ color: '#374151', fontWeight: isExpanded ? 600 : 400 }}>{cat}</span>
+                      <span style={{ color: '#9ca3af', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontWeight: 500, color: '#6b7280' }}>{checks.length}</span>
+                        <span>{isExpanded ? '▲' : '▼'}</span>
+                      </span>
+                    </button>
+                    {isExpanded && (
+                      <div style={{ paddingBottom: '8px', paddingLeft: '4px' }}>
+                        {checks.map((c, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '7px', padding: '3px 0', fontSize: '0.78rem', color: '#4b5563' }}>
+                            <span style={{
+                              width: '8px',
+                              height: '8px',
+                              borderRadius: '50%',
+                              backgroundColor: SEV_COLOR[c.severity].dot,
+                              flexShrink: 0,
+                              marginTop: '4px',
+                            }} />
+                            <span>{c.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>

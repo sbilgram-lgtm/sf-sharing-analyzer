@@ -81,6 +81,23 @@ export function assessOwd(data: { entities: any[] }): CategoryResult & { invento
     ));
   }
 
+  // Controlled by Parent where parent is also Private — chain confusion
+  const parentOf: Record<string, string> = { Contact: 'Account', Case: 'Account', Order: 'Account', Contract: 'Account' };
+  const owdByName = new Map(entities.map((e: any) => [e.QualifiedApiName, e.InternalSharingModel]));
+  const chainConfusion = entities.filter((e: any) =>
+    e.InternalSharingModel === 'ControlledByParent' &&
+    parentOf[e.QualifiedApiName] &&
+    owdByName.get(parentOf[e.QualifiedApiName]) === 'Private'
+  );
+  if (chainConfusion.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${chainConfusion.length} Object${chainConfusion.length > 1 ? 's Are' : ' Is'} Controlled by Parent With a Private Parent OWD`,
+      "When a child object's OWD is 'Controlled by Parent' and the parent (Account) is Private, users can only access child records through their access to the parent. Any change to Account-level sharing rules, role hierarchy, or ownership directly affects visibility of all related child records.",
+      'Document this dependency in your sharing architecture. When planning changes to Account-level sharing, evaluate the cascading impact on all child objects set to Controlled by Parent.',
+      { records: chainConfusion.map((e: any) => ({ name: e.Label, detail: `Controlled by Parent → ${parentOf[e.QualifiedApiName]} is Private` })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -217,6 +234,8 @@ export function assessTerritories(data: {
   territories: any[];
   rules: any[];
   userAssociations: any[];
+  usersInManyTerritories?: any[];
+  ruleItems?: any[];
 }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Territory Management';
@@ -267,6 +286,30 @@ export function assessTerritories(data: {
     ));
   }
 
+  // Users in 50+ territories
+  const manyTerritoryUsers = data.usersInManyTerritories || [];
+  if (manyTerritoryUsers.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${manyTerritoryUsers.length} User${manyTerritoryUsers.length > 1 ? 's Are' : ' Is'} Assigned to 50 or More Territories`,
+      'Users assigned to a very large number of territories gain broad record visibility that is difficult to audit and may exceed what their role requires.',
+      'Review territory assignments for these users. Consolidate access using higher-level parent territories where possible.',
+      { records: manyTerritoryUsers.slice(0, 50).map((u: any) => ({ name: u.Assignee?.Name || u.AssociateId, detail: `${u.tCount || u.expr0 || '50+'} territories` })) }
+    ));
+  }
+
+  // Hard-coded Salesforce IDs in assignment rule criteria
+  const ruleItems = data.ruleItems || [];
+  const sfIdPattern = /^[a-zA-Z0-9]{15}$|^[a-zA-Z0-9]{18}$/;
+  const hardCodedItems = ruleItems.filter((item: any) => sfIdPattern.test(item.Value || ''));
+  if (hardCodedItems.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${hardCodedItems.length} Territory Assignment Rule Criteria Use Hard-Coded Record IDs`,
+      'Assignment rules that filter on hard-coded record IDs will break silently when those records are deleted or when rules are migrated to another org.',
+      'Replace hard-coded ID values with text or picklist field criteria.',
+      { count: hardCodedItems.length }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -276,7 +319,7 @@ export function assessTerritories(data: {
 }
 
 // ── Sharing Rules ─────────────────────────────────────────────────────────────
-export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[]; allInternalGroupId?: string | null }): CategoryResult & { stats: any } {
+export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[]; allInternalGroupId?: string | null }, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Sharing Rules';
 
@@ -331,7 +374,7 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
 
   Array.from(rulesByObject.entries()).forEach(([obj, counts]) => {
     const objTotal = counts.ownerCount + counts.criteriaCount;
-    if (objTotal > 50) {
+    if (objTotal > 100) {
       findings.push(createFinding(CAT, 'medium',
         `${obj} Has ${objTotal} Sharing Rules — High Recalculation Risk`,
         `Objects with many sharing rules require more time to recalculate sharing when records change owners or when hierarchy changes occur.`,
@@ -340,6 +383,20 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
       ));
     }
   });
+
+  // Redundant sharing rules where OWD is already Public Read/Write
+  if (owdEntities && owdEntities.length > 0) {
+    const publicOwdObjects = new Set(owdEntities.filter((e: any) => e.InternalSharingModel === 'ReadWrite').map((e: any) => e.QualifiedApiName));
+    const redundantRuleObjects = Array.from(rulesByObject.keys()).filter(obj => publicOwdObjects.has(obj));
+    if (redundantRuleObjects.length > 0) {
+      findings.push(createFinding(CAT, 'medium',
+        `${redundantRuleObjects.length} Object${redundantRuleObjects.length > 1 ? 's Have' : ' Has'} Sharing Rules But OWD Is Already Public Read/Write`,
+        'Sharing rules on objects where the OWD is Public Read/Write have no effect — all internal users can already see and edit all records. These rules add sharing recalculation overhead without providing any access control benefit.',
+        'Delete sharing rules on objects where the internal OWD is Public Read/Write. If the intent is to restrict access, first change the OWD to Private and then implement targeted sharing rules.',
+        { records: redundantRuleObjects.map(obj => ({ name: obj, detail: `OWD: Public Read/Write, rules: ${(rulesByObject.get(obj)?.ownerCount || 0) + (rulesByObject.get(obj)?.criteriaCount || 0)}` })) }
+      ));
+    }
+  }
 
   // Build summary for inventory
   const summary = Array.from(rulesByObject.entries()).map(([object, counts]) => ({
@@ -362,7 +419,7 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
 }
 
 // ── Manual Sharing ────────────────────────────────────────────────────────────
-export function assessManualSharing(data: { manualShares: { object: string; count: number }[] }): CategoryResult & { stats: any } {
+export function assessManualSharing(data: { manualShares: { object: string; count: number }[] }, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Manual Sharing';
   const manualShares = data.manualShares || [];
@@ -386,6 +443,20 @@ export function assessManualSharing(data: { manualShares: { object: string; coun
     }
   }
 
+  // Private OWD + high manual sharing = compensating pattern
+  if (owdEntities && owdEntities.length > 0) {
+    const privateOwdObjects = new Set(owdEntities.filter((e: any) => e.InternalSharingModel === 'Private').map((e: any) => e.QualifiedApiName));
+    const compensatingObjects = manualShares.filter(s => s.count > 500 && privateOwdObjects.has(s.object));
+    if (compensatingObjects.length > 0) {
+      findings.push(createFinding(CAT, 'high',
+        `${compensatingObjects.length} Object${compensatingObjects.length > 1 ? 's Have' : ' Has'} Private OWD But High Manual Sharing Volume — Compensating Pattern Detected`,
+        'When an object has a Private OWD but high volumes of manual shares, it indicates users are manually granting access because the sharing model does not provide it automatically.',
+        'Analyze who is performing manual shares and why. Design sharing rules, role hierarchy adjustments, or Apex sharing to replace manual grants with automated access.',
+        { records: compensatingObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} manual shares, OWD: Private` })) }
+      ));
+    }
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -399,6 +470,7 @@ export function assessApexSharing(data: {
   withoutSharingClasses: { name: string; id: string }[];
   sharesCreatingClasses: { name: string; id: string }[];
   customSharingReasons: any[];
+  apexShareVolumes?: { object: string; reasons: { reason: string; count: number }[] }[];
 }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Apex Sharing';
@@ -430,6 +502,34 @@ export function assessApexSharing(data: {
     ));
   }
 
+  // Apex-managed share volume
+  const shareVolumes = data.apexShareVolumes || [];
+  const highVolumeApexShares = shareVolumes.filter(s => s.reasons.some((r: any) => r.count > 5000));
+  if (highVolumeApexShares.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `Apex-Managed Share Records Exceed 5,000 on ${highVolumeApexShares.length} Object${highVolumeApexShares.length > 1 ? 's' : ''}`,
+      'Large volumes of Apex-managed share records indicate the org relies heavily on programmatic sharing. High share record counts can slow sharing recalculation and increase storage usage.',
+      'Review the Apex classes creating these share records. Evaluate whether criteria-based sharing rules could replace some Apex sharing to reduce volume.',
+      { records: highVolumeApexShares.map(s => ({ name: s.object, detail: s.reasons.map((r: any) => `${r.reason}: ${r.count.toLocaleString()}`).join(', ') })) }
+    ));
+  }
+
+  // Zombie sharing reasons — defined but no class creating them
+  if (customReasons.length > 0 && data.sharesCreatingClasses && data.sharesCreatingClasses.length > 0) {
+    const creatingClassNames = data.sharesCreatingClasses.map((c: any) => c.name.toLowerCase()).join(' ');
+    const zombieReasons = customReasons.filter((r: any) =>
+      !creatingClassNames.includes((r.DeveloperName || '').toLowerCase())
+    );
+    if (zombieReasons.length > 0) {
+      findings.push(createFinding(CAT, 'low',
+        `${zombieReasons.length} Custom Sharing Reason${zombieReasons.length > 1 ? 's Have' : ' Has'} No Corresponding Active Apex Class`,
+        'Custom Apex sharing reasons that are not referenced by any active Apex class are zombie configuration — they exist in the org but serve no current purpose.',
+        'Review each sharing reason. Delete reasons that are no longer used.',
+        { records: zombieReasons.map((r: any) => ({ name: r.Label || r.DeveloperName, detail: 'No matching Apex class found' })) }
+      ));
+    }
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -446,7 +546,7 @@ export function assessRecordTeams(data: {
   accountTeam: { members: any[]; enabled: boolean };
   caseTeam: { templates: any[]; enabled: boolean };
   oppTeam: { members: any[]; enabled: boolean };
-}): CategoryResult & { stats: any } {
+}, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Record Teams';
 
@@ -478,6 +578,19 @@ export function assessRecordTeams(data: {
     }
   }
 
+  // Case teams + Private Case OWD — compensating control check
+  if (owdEntities && owdEntities.length > 0 && data.caseTeam?.enabled && caseTemplates.length > 0) {
+    const caseEntity = owdEntities.find((e: any) => e.QualifiedApiName === 'Case');
+    if (caseEntity && caseEntity.InternalSharingModel === 'Private') {
+      findings.push(createFinding(CAT, 'medium',
+        'Case Teams Are Active with Private Case OWD — Review Access Patterns',
+        `Case teams are in use and Case OWD is Private. While case teams are a legitimate access mechanism, they can become the primary way Case records are shared — creating an administrative burden and making Case access difficult to audit systematically.`,
+        'Review case team templates. Evaluate whether criteria-based sharing rules could replace manual case team membership for predictable access patterns. Reserve case teams for exceptions that sharing rules cannot address.',
+        { count: caseTemplates.length }
+      ));
+    }
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -499,7 +612,7 @@ export function assessGroupsQueues(data: {
   groupMemberCounts: any[];
   queues: any[];
   queueObjects: any[];
-}): CategoryResult & { stats: any } {
+}, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Groups & Queues';
 
@@ -543,6 +656,25 @@ export function assessGroupsQueues(data: {
     ));
   }
 
+  // Queues on Public OWD objects — redundant sharing pattern
+  if (owdEntities && owdEntities.length > 0 && data.queueObjects && data.queueObjects.length > 0) {
+    const publicOwdNames = new Set(
+      owdEntities
+        .filter((e: any) => e.InternalSharingModel === 'Public' || e.InternalSharingModel === 'ReadWrite')
+        .map((e: any) => e.QualifiedApiName)
+    );
+    const queuesOnPublicObjects = data.queueObjects.filter((qo: any) => publicOwdNames.has(qo.SobjectType));
+    if (queuesOnPublicObjects.length > 0) {
+      const uniqueObjects = [...new Set(queuesOnPublicObjects.map((qo: any) => qo.SobjectType))];
+      findings.push(createFinding(CAT, 'low',
+        `Queues Configured on Public OWD Objects — Redundant Access Mechanism`,
+        `Queues exist for ${uniqueObjects.length} object${uniqueObjects.length > 1 ? 's' : ''} that already have Public internal OWD. Since all users can already read these records, queue membership grants no additional visibility — the configuration is redundant.`,
+        'Review whether queues on Public OWD objects serve a workflow routing purpose (valid) or were created under the assumption that they grant visibility (not needed). Clean up queues that serve no routing function.',
+        { records: uniqueObjects.map(o => ({ name: o as string, detail: 'Public OWD — queue visibility redundant' })) }
+      ));
+    }
+  }
+
   const publicGroups = groups.filter(g => g.Type === 'Regular');
   return {
     category: CAT,
@@ -558,6 +690,7 @@ export function assessPermissionBypasses(data: {
   modifyAllDataUsers: any[];
   viewAllObjectPerms: any[];
   modifyAllObjectPerms: any[];
+  totalActiveUsers?: number;
 }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Permission Bypasses';
@@ -618,6 +751,34 @@ export function assessPermissionBypasses(data: {
       'Audit which profiles and permission sets grant Modify All Records. Restrict to only objects where bulk admin access is genuinely required.',
       { count: modifyAllObjects.size }
     ));
+  }
+
+  // 5% bypass threshold check
+  if (data.totalActiveUsers && data.totalActiveUsers > 0) {
+    const totalBypasses = new Set([...vadUsers.map(u => u.Id), ...madUsers.map(u => u.Id)]).size;
+    const bypassPct = totalBypasses / data.totalActiveUsers;
+    if (bypassPct > 0.05) {
+      findings.push(createFinding(CAT, 'high',
+        `${Math.round(bypassPct * 100)}% of Active Users Have Org-Wide Sharing Bypass Permissions`,
+        `${totalBypasses} of ${data.totalActiveUsers} active users hold View All Data or Modify All Data. When more than 5% of users bypass record-level security, the sharing model provides limited real protection.`,
+        'Establish a target of fewer than 5 named system admin accounts with these permissions. Migrate over-privileged users to object-level View All / Modify All permissions where broader access is genuinely needed.',
+        { count: totalBypasses }
+      ));
+    }
+  }
+
+  // Profile vs Permission Set breakdown — flag if Permission Set grants are the majority
+  if (vadUsers.length > 0 || madUsers.length > 0) {
+    const allBypassUsers = [...vadUsers, ...madUsers];
+    const permSetGrants = allBypassUsers.filter((u: any) => u.grantSource === 'Permission Set').length;
+    if (permSetGrants > allBypassUsers.length * 0.5) {
+      findings.push(createFinding(CAT, 'medium',
+        `Majority of Sharing Bypass Grants Are via Permission Sets — Harder to Audit`,
+        `${permSetGrants} of ${allBypassUsers.length} bypass grants come from Permission Sets rather than Profiles. Permission Set assignments are harder to audit at scale and can proliferate over time.`,
+        'Review all Permission Set assignments granting VAD/MAD. Consider consolidating to Profile-based grants for the small number of users who truly need these permissions, making the grant list easier to audit and govern.',
+        { count: permSetGrants }
+      ));
+    }
   }
 
   return {
@@ -686,7 +847,7 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
 }
 
 // ── External & Guest Access ───────────────────────────────────────────────────
-export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[] }): CategoryResult & { stats: any } {
+export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[] }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'External & Guest Access';
   const guestProfiles: any[] = data.guestProfiles || [];
@@ -714,13 +875,25 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
     }
   }
 
+  // High-volume portal user sharing sets
+  const sharingSets: any[] = data.sharingSets || [];
+  if (sharingSets.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${sharingSets.length} Sharing Set${sharingSets.length > 1 ? 's' : ''} Grant Access to High-Volume Portal Users`,
+      'Sharing sets grant record access to High-Volume Portal (HVP) users based on field relationships — these users are excluded from the standard sharing model. Sharing sets can grant broad access if the access-mapping field is widely populated.',
+      'Review each sharing set. Confirm the access mapping field correctly scopes access. Ensure the access level (Read vs Read/Write) matches the minimum necessary for the portal use case.',
+      { records: sharingSets.map((s: any) => ({ name: s.name || s.Name, detail: `${s.accessLevel || 'Unknown'} access` })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
     items: findings,
     stats: {
       guestEnabled: guestProfiles.length > 0,
-      externalObjectCount: externalEntities.length
+      externalObjectCount: externalEntities.length,
+      sharingSetsCount: sharingSets.length
     }
   };
 }

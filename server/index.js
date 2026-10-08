@@ -255,22 +255,26 @@ app.get('/api/assess/role-hierarchy', requireAuth, async (req, res) => {
 app.get('/api/assess/territories', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [modelsRes, territoriesRes, rulesRes, userAssocRes] = await Promise.all([
+    const [modelsRes, territoriesRes, rulesRes, userAssocRes, manyTerritoryUsersRes, ruleItemsRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name, State, Description FROM Territory2Model LIMIT 50"),
       safeQuery(conn, "SELECT Id, Name, ParentTerritory2Id, Territory2ModelId FROM Territory2 LIMIT 2000"),
       safeQuery(conn, "SELECT Id, Territory2Id, IsActive, BooleanFilter FROM Territory2Rule LIMIT 2000"),
-      safeQuery(conn, "SELECT Territory2Id, COUNT(Id) userCount FROM UserTerritory2Association GROUP BY Territory2Id LIMIT 2000")
+      safeQuery(conn, "SELECT Territory2Id, COUNT(Id) userCount FROM UserTerritory2Association GROUP BY Territory2Id LIMIT 2000"),
+      safeQuery(conn, "SELECT AssociateId, Assignee.Name, COUNT(Id) tCount FROM UserTerritory2Association GROUP BY AssociateId, Assignee.Name HAVING COUNT(Id) > 49 LIMIT 200").catch(() => ({ records: [] })),
+      safeQuery(conn, "SELECT Territory2RuleId, Field, Operation, Value FROM Territory2RuleItem LIMIT 2000").catch(() => ({ records: [] }))
     ]);
     res.json({
       enabled: (modelsRes.records || []).length > 0,
       models: modelsRes.records || [],
       territories: territoriesRes.records || [],
       rules: rulesRes.records || [],
-      userAssociations: userAssocRes.records || []
+      userAssociations: userAssocRes.records || [],
+      usersInManyTerritories: manyTerritoryUsersRes.records || [],
+      ruleItems: ruleItemsRes.records || []
     });
   } catch (err) {
     // Territory2 not enabled — return disabled state
-    res.json({ enabled: false, models: [], territories: [], rules: [], userAssociations: [] });
+    res.json({ enabled: false, models: [], territories: [], rules: [], userAssociations: [], usersInManyTerritories: [], ruleItems: [] });
   }
 });
 
@@ -343,10 +347,21 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       /\b\w+Share\b\s*\w+\s*=\s*new\b/i.test(c.Body || '')
     );
 
+    const standardObjects = ['Account', 'Case', 'Opportunity', 'Contact', 'Lead', 'Campaign'];
+    const shareVolumeResults = await Promise.all(
+      standardObjects.map(obj =>
+        safeQuery(conn,
+          `SELECT RowCause, COUNT(Id) shareCount FROM ${obj}Share WHERE RowCause NOT IN ('Owner','Manual','Role','RoleAndSubordinates','Team','Territory','TerritoryManual') GROUP BY RowCause LIMIT 20`
+        ).then(r => ({ object: obj, reasons: (r.records || []).map((rec) => ({ reason: rec.RowCause, count: rec.shareCount || rec.expr0 || 0 })) }))
+         .catch(() => ({ object: obj, reasons: [] }))
+      )
+    );
+
     res.json({
       withoutSharingClasses: withoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       sharesCreatingClasses: createsShares.map(c => ({ name: c.Name, id: c.Id })),
-      customSharingReasons: sharingReasonsRes.records || []
+      customSharingReasons: sharingReasonsRes.records || [],
+      apexShareVolumes: shareVolumeResults
     });
   } catch (err) {
     console.error('Apex sharing assessment error:', err);
@@ -426,7 +441,8 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
     const [
       vadProfileUsersRes, madProfileUsersRes,
       vadPermSetUsersRes, madPermSetUsersRes,
-      viewAllPermsRes, modifyAllPermsRes
+      viewAllPermsRes, modifyAllPermsRes,
+      totalUsersRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Profile.Name FROM User " +
@@ -451,7 +467,8 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       ),
       safeToolingQuery(conn,
         "SELECT Id, SobjectType FROM ObjectPermissions WHERE PermissionsModifyAllRecords = true LIMIT 500"
-      )
+      ),
+      safeQuery(conn, "SELECT COUNT(Id) FROM User WHERE IsActive = true AND UserType = 'Standard'").catch(() => ({ records: [{ expr0: 0 }] }))
     ]);
 
     const vadUserMap = new Map();
@@ -480,7 +497,8 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       viewAllDataUsers: Array.from(vadUserMap.values()),
       modifyAllDataUsers: Array.from(madUserMap.values()),
       viewAllObjectPerms: viewAllPermsRes.records || [],
-      modifyAllObjectPerms: modifyAllPermsRes.records || []
+      modifyAllObjectPerms: modifyAllPermsRes.records || [],
+      totalActiveUsers: (totalUsersRes.records[0] || {}).expr0 || 0
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);
@@ -509,17 +527,19 @@ app.get('/api/assess/implicit-sharing', requireAuth, async (req, res) => {
 app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [guestProfileRes, externalEntitiesRes] = await Promise.all([
+    const [guestProfileRes, externalEntitiesRes, sharingSetRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
         "FROM EntityDefinition " +
         "WHERE ExternalSharingModel != 'Private' AND IsCustomizable = true LIMIT 200"
-      )
+      ),
+      safeToolingQuery(conn, "SELECT Id, Name FROM SharingSet LIMIT 100").catch(() => ({ records: [] }))
     ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
-      externalEntities: externalEntitiesRes.records || []
+      externalEntities: externalEntitiesRes.records || [],
+      sharingSets: sharingSetRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);

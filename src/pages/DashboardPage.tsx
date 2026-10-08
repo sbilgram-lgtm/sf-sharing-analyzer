@@ -82,14 +82,15 @@ export const DashboardPage: React.FC = () => {
       const externalData = await getExternalAccessData();
 
       setProgress('Calculating scores...');
+      const owdEntities = owdData?.entities || [];
       const owdResult = assessOwd(owdData);
       const roleResult = assessRoleHierarchy(roleData);
       const territoryResult = assessTerritories(territoryData);
-      const sharingRulesResult = assessSharingRules(sharingRulesData);
-      const manualResult = assessManualSharing(manualSharingData);
+      const sharingRulesResult = assessSharingRules(sharingRulesData, owdEntities);
+      const manualResult = assessManualSharing(manualSharingData, owdEntities);
       const apexResult = assessApexSharing(apexSharingData);
-      const teamsResult = assessRecordTeams(recordTeamsData);
-      const groupsResult = assessGroupsQueues(groupsQueuesData);
+      const teamsResult = assessRecordTeams(recordTeamsData, owdEntities);
+      const groupsResult = assessGroupsQueues(groupsQueuesData, owdEntities);
       const bypassResult = assessPermissionBypasses(bypassData);
       const implicitResult = assessImplicitSharing(implicitData);
       const externalResult = assessExternalAccess(externalData);
