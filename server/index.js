@@ -37,6 +37,8 @@ if (isProduction) {
   app.set('trust proxy', 1);
 }
 
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
 function getBaseUrl(req) {
   if (process.env.BASE_URL) return process.env.BASE_URL;
   if (isProduction) return `${req.protocol}://${req.get('host')}`;
