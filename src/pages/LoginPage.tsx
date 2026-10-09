@@ -175,8 +175,11 @@ export const LoginPage: React.FC = () => {
           <h1 style={{ margin: '0 0 8px', fontSize: '2rem', color: '#1a1a2e', fontWeight: 800 }}>
             SF Sharing Analyzer
           </h1>
-          <p style={{ color: '#6b7280', margin: 0, fontSize: '1.05rem' }}>
+          <p style={{ color: '#6b7280', margin: '0 0 4px', fontSize: '1.05rem' }}>
             Comprehensive Sharing &amp; Visibility Architecture Review
+          </p>
+          <p style={{ fontSize: '0.85rem', color: '#9ca3af', margin: 0, fontWeight: 400 }}>
+            by <strong style={{ color: '#6b7280' }}>Steven Bilgram</strong>, Success Architect
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '16px', flexWrap: 'wrap' }}>
             {[
@@ -403,10 +406,10 @@ export const LoginPage: React.FC = () => {
           )}
         </div>
 
-      </div>
+        <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.75rem', color: '#c4c9d4' }}>
+          Independent tool — not affiliated with or endorsed by Salesforce, Inc.
+        </div>
 
-      <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.75rem', color: '#c4c9d4' }}>
-        Independent tool — not affiliated with or endorsed by Salesforce, Inc.
       </div>
     </div>
   );
