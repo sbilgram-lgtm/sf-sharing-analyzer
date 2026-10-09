@@ -45,7 +45,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Object Approaching 50 Criteria-Based Sharing Rule Limit (40+)', severity: 'medium' },
     { title: 'Restriction Rules Configured — Review Access Restrictions', severity: 'low' },
     { title: 'No Restriction Rules Configured — Evaluate Opportunity', severity: 'low' },
-    { title: 'Sharing Rules Are Redundant with Object\'s Public OWD', severity: 'low' },
+    { title: "Sharing Rules Are Redundant with Object's Public OWD", severity: 'low' },
   ],
   'Manual Sharing': [
     { title: 'Object Has Very High Manual Share Volume (10,000+)', severity: 'high' },
@@ -102,40 +102,88 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
 
 const TOTAL_CHECKS = Object.values(CATEGORY_CHECKS).reduce((sum, arr) => sum + arr.length, 0);
 
-const SEV_COLOR: Record<Severity, { bg: string; text: string; dot: string }> = {
-  critical: { bg: '#fdf0ed', text: '#c0392b', dot: '#c0392b' },
-  high:     { bg: '#fef5e7', text: '#d35400', dot: '#d35400' },
-  medium:   { bg: '#fef9e7', text: '#f39c12', dot: '#f39c12' },
-  low:      { bg: '#eafaf1', text: '#27ae60', dot: '#27ae60' },
+const GROUP_COLORS: Record<string, string> = {
+  'Foundation':     '#0070d2',
+  'Sharing':        '#8e44ad',
+  'Access Control': '#d35400',
+  'Visibility':     '#27ae60',
+};
+
+const CATEGORIES = [
+  { icon: '🏠', name: 'OWD Analysis',            group: 'Foundation' },
+  { icon: '🔼', name: 'Role Hierarchy',           group: 'Foundation' },
+  { icon: '🗺️',  name: 'Territory Management',   group: 'Foundation' },
+  { icon: '📋', name: 'Sharing Rules',            group: 'Sharing' },
+  { icon: '✋', name: 'Manual Sharing',           group: 'Sharing' },
+  { icon: '⚡', name: 'Apex Sharing',             group: 'Sharing' },
+  { icon: '👥', name: 'Record Teams',             group: 'Access Control' },
+  { icon: '🗂️',  name: 'Groups & Queues',        group: 'Access Control' },
+  { icon: '🔑', name: 'Permission Bypasses',      group: 'Access Control' },
+  { icon: '🔗', name: 'Implicit Sharing',         group: 'Visibility' },
+  { icon: '🌐', name: 'External & Guest Access',  group: 'Visibility' },
+];
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  color: '#5a6472',
+  letterSpacing: '0.04em',
+  marginBottom: '4px',
+  textTransform: 'uppercase',
+};
+
+const inputStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  padding: '10px 12px',
+  border: '1px solid #d1d5db',
+  borderRadius: '6px',
+  fontSize: '0.88rem',
+  color: '#1a2332',
+  backgroundColor: 'white',
+  outline: 'none',
+  boxSizing: 'border-box',
+  marginTop: '4px',
 };
 
 export const LoginPage: React.FC = () => {
-  const [orgUrl, setOrgUrl] = useState('https://login.salesforce.com');
+  const [orgUrl, setOrgUrl] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [remember, setRemember] = useState(true);
+  const [error, setError] = useState('');
+  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        const { orgUrl: u, clientId: c, clientSecret: s } = JSON.parse(saved);
-        if (u) setOrgUrl(u);
-        if (c) setClientId(c);
-        if (s) setClientSecret(s);
-      } catch (_) { /* ignore */ }
-    }
     const params = new URLSearchParams(window.location.search);
     if (params.get('error')) {
       setError(decodeURIComponent(params.get('error') || 'Authentication failed'));
     }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const { orgUrl: u, clientId: c, clientSecret: s } = JSON.parse(saved);
+        if (u) setOrgUrl(u);
+        if (c) setClientId(c);
+        if (s) setClientSecret(s);
+      }
+    } catch {} // ignore
     getAuthStatus().then(status => {
       if (status.authenticated) navigate('/dashboard');
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setSelectedCategory(null); setShowSetup(false); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
   const handleConnect = (e: React.FormEvent) => {
@@ -144,289 +192,524 @@ export const LoginPage: React.FC = () => {
       setError('Consumer Key and Consumer Secret are required.');
       return;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ orgUrl, clientId, clientSecret }));
+    if (remember) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ orgUrl, clientId, clientSecret }));
+    }
     const url = `/auth/login?loginUrl=${encodeURIComponent(orgUrl)}&clientId=${encodeURIComponent(clientId)}&clientSecret=${encodeURIComponent(clientSecret)}`;
     window.location.href = url;
   };
 
-  const severityCounts = Object.values(CATEGORY_CHECKS).flat().reduce((acc, c) => {
-    acc[c.severity] = (acc[c.severity] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f0f4ff', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px' }}>
-      <div style={{ width: '100%', maxWidth: '880px' }}>
-
+    <div style={{
+      display: 'flex',
+      minHeight: '100vh',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    }}>
+      {/* ── LEFT PANEL ── */}
+      <div style={{
+        flex: '0 0 60%',
+        background: 'linear-gradient(145deg, #032D60 0%, #0070D2 60%, #1589EE 100%)',
+        color: 'white',
+        padding: '20px 40px',
+        display: 'flex',
+        flexDirection: 'column',
+        overflowY: 'hidden',
+      }}>
         {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: '36px' }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '64px',
-            height: '64px',
-            backgroundColor: '#1a56db',
-            borderRadius: '16px',
-            marginBottom: '16px'
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{ marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 500, opacity: 0.85, letterSpacing: '0.05em' }}>
+              SALESFORCE SHARING ANALYZER
+            </span>
+          </div>
+          <h1 style={{
+            fontSize: '1.8rem',
+            fontWeight: 700,
+            margin: '0 0 2px',
+            lineHeight: 1.15,
+            letterSpacing: '-0.02em',
           }}>
-            <span style={{ color: 'white', fontSize: '28px' }}>🔒</span>
-          </div>
-          <h1 style={{ margin: '0 0 8px', fontSize: '2rem', color: '#1a1a2e', fontWeight: 800 }}>
-            SF Sharing Analyzer
+            Understand your org's sharing model in minutes.
           </h1>
-          <p style={{ color: '#6b7280', margin: '0 0 4px', fontSize: '1.05rem' }}>
-            Comprehensive Sharing &amp; Visibility Architecture Review
+          <p style={{ fontSize: '0.85rem', opacity: 0.75, margin: '0 0 4px', fontWeight: 400 }}>
+            by <strong style={{ opacity: 1 }}>Steven Bilgram</strong>, Success Architect
           </p>
-          <p style={{ fontSize: '0.85rem', color: '#9ca3af', margin: 0, fontWeight: 400 }}>
-            by <strong style={{ color: '#6b7280' }}>Steven Bilgram</strong>, Success Architect
+          <p style={{
+            fontSize: '0.85rem',
+            lineHeight: 1.5,
+            opacity: 0.88,
+            maxWidth: '520px',
+            marginTop: '6px',
+          }}>
+            Connects securely to your Salesforce org via OAuth and runs a comprehensive
+            read-only scan across <strong>{TOTAL_CHECKS} checks</strong> in {CATEGORIES.length} categories —
+            mapping your complete sharing and visibility architecture with findings and remediation guidance.
           </p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '16px', flexWrap: 'wrap' }}>
-            {[
-              { value: `${TOTAL_CHECKS}`, label: 'Checks' },
-              { value: '11', label: 'Categories' },
-              { value: '100%', label: 'Read-Only' },
-              { value: '< 3 min', label: 'To Complete' }
-            ].map(s => (
-              <div key={s.label} style={{ textAlign: 'center' }}>
-                <div style={{ fontWeight: 800, fontSize: '1.4rem', color: '#1a56db' }}>{s.value}</div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
         </div>
 
-        {/* Disclaimer box */}
+        {/* Stats bar */}
         <div style={{
-          backgroundColor: '#eaf1fb',
-          border: '1.5px solid #0070d2',
-          borderRadius: '8px',
-          padding: '14px 16px',
-          marginBottom: '24px',
+          display: 'flex',
+          gap: '32px',
+          marginBottom: '10px',
+          paddingBottom: '10px',
+          borderBottom: '1px solid rgba(255,255,255,0.2)',
         }}>
-          <p style={{ margin: '0 0 6px', fontSize: '0.82rem', fontWeight: 700, color: '#032d60', lineHeight: 1.4 }}>
-            Important Disclaimer
-          </p>
-          <p style={{ margin: 0, fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
-            SF Sharing Analyzer is provided "as is," without warranties. Its assessments and recommendations reflect my professional experience as a technical architect but are intended as decision-support guidance, not legal, regulatory, or financial advice.
-          </p>
-          <p style={{ margin: '8px 0 0', fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
-            Users are responsible for validating results and adapting recommendations to their specific environment, requirements, and risks. I accept no liability for its use or misuse; by using the software, you accept these terms.
-          </p>
+          {[
+            { value: TOTAL_CHECKS, label: 'Total Checks' },
+            { value: CATEGORIES.length, label: 'Categories' },
+            { value: '100%', label: 'Read-Only' },
+          ].map(stat => (
+            <div key={stat.label}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, lineHeight: 1 }}>{stat.value}</div>
+              <div style={{ fontSize: '0.72rem', opacity: 0.7, marginTop: '3px', letterSpacing: '0.03em' }}>{stat.label}</div>
+            </div>
+          ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        {/* Category grid */}
+        <div style={{ marginBottom: '6px' }}>
+          <p style={{ fontSize: '0.72rem', opacity: 0.6, margin: '0 0 6px', letterSpacing: '0.03em' }}>
+            Click any category to see all checks
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '7px' }}>
+            {CATEGORIES.map(cat => {
+              const accentColor = GROUP_COLORS[cat.group] || 'rgba(255,255,255,0.4)';
+              const isHovered = hoveredCategory === cat.name;
+              return (
+                <div
+                  key={cat.name}
+                  onClick={() => setSelectedCategory(cat.name)}
+                  onMouseEnter={() => setHoveredCategory(cat.name)}
+                  onMouseLeave={() => setHoveredCategory(null)}
+                  style={{
+                    backgroundColor: isHovered ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)',
+                    borderRadius: '8px',
+                    padding: '8px 10px',
+                    backdropFilter: 'blur(4px)',
+                    borderTop: isHovered ? '1px solid rgba(255,255,255,0.35)' : '1px solid rgba(255,255,255,0.12)',
+                    borderRight: isHovered ? '1px solid rgba(255,255,255,0.35)' : '1px solid rgba(255,255,255,0.12)',
+                    borderBottom: isHovered ? '1px solid rgba(255,255,255,0.35)' : '1px solid rgba(255,255,255,0.12)',
+                    borderLeft: `3px solid ${accentColor}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.12s, border-color 0.12s',
+                    userSelect: 'none',
+                  }}
+                >
+                  <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>{cat.icon}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>
+                      {cat.name}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', opacity: 0.65, marginTop: '1px' }}>
+                      {(CATEGORY_CHECKS[cat.name] || []).length} check{(CATEGORY_CHECKS[cat.name] || []).length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-          {/* Connect form */}
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '28px', boxShadow: '0 1px 6px rgba(0,0,0,0.08)' }}>
-            <h2 style={{ margin: '0 0 20px', fontSize: '1.1rem', color: '#1a1a2e' }}>Connect to Salesforce</h2>
-
-            {error && (
-              <div style={{ backgroundColor: '#fdf0ed', border: '1px solid #c0392b', borderRadius: '6px', padding: '10px 14px', marginBottom: '16px', color: '#c0392b', fontSize: '0.85rem' }}>
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleConnect}>
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px', color: '#374151' }}>
-                  Salesforce Login URL
-                </label>
-                <input
-                  type="text"
-                  value={orgUrl}
-                  onChange={e => setOrgUrl(e.target.value)}
-                  style={{ width: '100%', padding: '9px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px', color: '#374151' }}>
-                  Consumer Key
-                </label>
-                <input
-                  type="text"
-                  value={clientId}
-                  onChange={e => setClientId(e.target.value)}
-                  placeholder="3MVG9..."
-                  style={{ width: '100%', padding: '9px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px', color: '#374151' }}>
-                  Consumer Secret
-                </label>
-                <input
-                  type="password"
-                  value={clientSecret}
-                  onChange={e => setClientSecret(e.target.value)}
-                  style={{ width: '100%', padding: '9px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' }}
-                />
-              </div>
-              <button
-                type="submit"
-                style={{
-                  width: '100%',
-                  backgroundColor: '#1a56db',
-                  color: 'white',
-                  border: 'none',
-                  padding: '11px',
-                  borderRadius: '7px',
-                  fontSize: '0.95rem',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                Connect to Salesforce →
-              </button>
-            </form>
-
-            <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#9ca3af', textAlign: 'center' }}>
-              Read-only OAuth 2.0 · No data stored · Session only
+        {/* Group legend */}
+        <div style={{ marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '5px 14px' }}>
+          {Object.entries(GROUP_COLORS).map(([group, color]) => (
+            <div key={group} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: color, flexShrink: 0 }} />
+              <span style={{ fontSize: '0.68rem', opacity: 0.7, whiteSpace: 'nowrap' }}>{group}</span>
             </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.15)' }}>
+          <p style={{ margin: 0, fontSize: '0.72rem', color: 'rgba(255,255,255,0.75)', lineHeight: 1.5 }}>
+            Read-only OAuth access · No data stored · Session only
+          </p>
+        </div>
+      </div>
+
+      {/* ── RIGHT PANEL ── */}
+      <div style={{
+        flex: '0 0 40%',
+        backgroundColor: '#f8f9fa',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '48px 40px',
+        overflowY: 'auto',
+      }}>
+        <div style={{ width: '100%', maxWidth: '380px' }}>
+
+          {/* Disclaimer box */}
+          <div style={{
+            backgroundColor: '#eaf1fb',
+            border: '1.5px solid #0070d2',
+            borderRadius: '8px',
+            padding: '14px 16px',
+            marginBottom: '28px',
+          }}>
+            <p style={{ margin: '0 0 6px', fontSize: '0.82rem', fontWeight: 700, color: '#032d60', lineHeight: 1.4 }}>
+              Important Disclaimer
+            </p>
+            <p style={{ margin: 0, fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
+              SF Sharing Analyzer is provided "as is," without warranties. Its assessments and recommendations reflect my professional experience as a technical architect but are intended as decision-support guidance, not legal, regulatory, or financial advice.
+            </p>
+            <p style={{ margin: '8px 0 0', fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
+              Users are responsible for validating results and adapting recommendations to their specific environment, requirements, and risks. I accept no liability for its use or misuse; by using the software, you accept these terms.
+            </p>
           </div>
 
-          {/* Setup instructions */}
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '28px', boxShadow: '0 1px 6px rgba(0,0,0,0.08)' }}>
-            <h2 style={{ margin: '0 0 20px', fontSize: '1.1rem', color: '#1a1a2e' }}>What's Covered</h2>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1a2332', margin: '0 0 6px' }}>
+            Connect your org
+          </h2>
+          <p style={{ fontSize: '0.85rem', color: '#7f8c8d', margin: '0 0 32px', lineHeight: 1.5 }}>
+            Enter your Connected App credentials to authenticate via Salesforce OAuth.
+          </p>
+
+          {error && (
+            <div style={{
+              backgroundColor: '#fdf0ed',
+              border: '1px solid #e74c3c',
+              borderRadius: '6px',
+              padding: '10px 14px',
+              marginBottom: '20px',
+              fontSize: '0.82rem',
+              color: '#c0392b',
+            }}>
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleConnect}>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={labelStyle}>
+                Org / Sandbox URL
+                <input
+                  type="text"
+                  placeholder="https://company.my.salesforce.com"
+                  value={orgUrl}
+                  onChange={e => { setOrgUrl(e.target.value); setError(''); }}
+                  style={inputStyle}
+                />
+              </label>
+              <p style={{ fontSize: '0.72rem', color: '#aaa', margin: '4px 0 0' }}>
+                Use your org's My Domain URL
+              </p>
+            </div>
 
             <div style={{ marginBottom: '16px' }}>
-              {Object.entries(CATEGORY_CHECKS).map(([cat, checks]) => {
-                const isExpanded = expandedCategory === cat;
+              <label style={labelStyle}>
+                Client ID (Consumer Key)
+                <input
+                  type="text"
+                  placeholder="3MVG9..."
+                  value={clientId}
+                  onChange={e => { setClientId(e.target.value); setError(''); }}
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={labelStyle}>
+                Client Secret (Consumer Secret)
+                <input
+                  type="password"
+                  placeholder="••••••••••••••••"
+                  value={clientSecret}
+                  onChange={e => { setClientSecret(e.target.value); setError(''); }}
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <input
+                type="checkbox"
+                id="remember"
+                checked={remember}
+                onChange={e => setRemember(e.target.checked)}
+                style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: '#0070D2' }}
+              />
+              <label htmlFor="remember" style={{ fontSize: '0.8rem', color: '#5a6472', cursor: 'pointer' }}>
+                Remember credentials on this device
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                background: 'linear-gradient(135deg, #0070D2 0%, #1589EE 100%)',
+                color: 'white',
+                border: 'none',
+                padding: '14px 24px',
+                borderRadius: '8px',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                width: '100%',
+                letterSpacing: '0.01em',
+                boxShadow: '0 2px 8px rgba(0,112,210,0.35)',
+                transition: 'opacity 0.15s, transform 0.1s',
+              }}
+              onMouseOver={e => { e.currentTarget.style.opacity = '0.92'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+              onMouseOut={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'translateY(0)'; }}
+            >
+              Connect to Salesforce →
+            </button>
+          </form>
+
+          <p style={{ marginTop: '20px', fontSize: '0.72rem', color: '#bdc3c7', lineHeight: 1.6, textAlign: 'center' }}>
+            Need Instructions?{' '}
+            <button
+              onClick={() => setShowSetup(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                color: '#0070D2',
+                fontWeight: 500,
+                fontSize: '0.72rem',
+                cursor: 'pointer',
+              }}
+            >
+              See the setup guide →
+            </button>
+          </p>
+        </div>
+      </div>
+
+      {/* ── CATEGORY MODAL ── */}
+      {selectedCategory && (
+        <div
+          onClick={() => setSelectedCategory(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '24px',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              width: '100%',
+              maxWidth: '520px',
+              maxHeight: '75vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              padding: '18px 24px 14px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: 'linear-gradient(135deg, #032D60 0%, #0070D2 100%)',
+              color: 'white',
+              flexShrink: 0,
+            }}>
+              <div>
+                <h3 style={{ margin: '0 0 2px', fontSize: '1rem', fontWeight: 700 }}>{selectedCategory}</h3>
+                <p style={{ margin: 0, fontSize: '0.78rem', opacity: 0.75 }}>
+                  {(CATEGORY_CHECKS[selectedCategory] || []).length} checks in this category
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedCategory(null)}
+                style={{
+                  background: 'rgba(255,255,255,0.2)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '28px',
+                  height: '28px',
+                  fontSize: '1.1rem',
+                  cursor: 'pointer',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >×</button>
+            </div>
+            <div style={{ overflowY: 'auto', padding: '16px 24px 20px' }}>
+              {(CATEGORY_CHECKS[selectedCategory] || []).map((check, i) => {
+                const checks = CATEGORY_CHECKS[selectedCategory] || [];
+                const dotColor = check.severity === 'critical' ? '#c0392b' : check.severity === 'high' ? '#d35400' : check.severity === 'medium' ? '#f39c12' : '#27ae60';
+                const bgColor = check.severity === 'critical' ? '#fdf0ed' : check.severity === 'high' ? '#fef5e7' : check.severity === 'medium' ? '#fef9e7' : '#eafaf1';
                 return (
-                  <div key={cat} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                    <button
-                      onClick={() => setExpandedCategory(isExpanded ? null : cat)}
-                      style={{
-                        width: '100%',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '7px 0',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.85rem',
-                        textAlign: 'left',
-                      }}
-                    >
-                      <span style={{ color: '#374151', fontWeight: isExpanded ? 600 : 400 }}>{cat}</span>
-                      <span style={{ color: '#9ca3af', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontWeight: 500, color: '#6b7280' }}>{checks.length}</span>
-                        <span>{isExpanded ? '▲' : '▼'}</span>
-                      </span>
-                    </button>
-                    {isExpanded && (
-                      <div style={{ paddingBottom: '8px', paddingLeft: '4px' }}>
-                        {checks.map((c, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '7px', padding: '3px 0', fontSize: '0.78rem', color: '#4b5563' }}>
-                            <span style={{
-                              width: '8px',
-                              height: '8px',
-                              borderRadius: '50%',
-                              backgroundColor: SEV_COLOR[c.severity].dot,
-                              flexShrink: 0,
-                              marginTop: '4px',
-                            }} />
-                            <span>{c.title}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    padding: '6px 0',
+                    borderBottom: i < checks.length - 1 ? '1px solid #f3f4f6' : 'none',
+                  }}>
+                    <span style={{
+                      backgroundColor: bgColor,
+                      color: dotColor,
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      padding: '2px 6px',
+                      borderRadius: '10px',
+                      flexShrink: 0,
+                      marginTop: '1px',
+                      textTransform: 'uppercase',
+                    }}>
+                      {check.severity}
+                    </span>
+                    <span style={{ fontSize: '0.82rem', color: '#2c3e50', lineHeight: 1.4 }}>{check.title}</span>
                   </div>
                 );
               })}
             </div>
-
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {(['critical', 'high', 'medium', 'low'] as const).map(sev => (
-                <span key={sev} style={{
-                  padding: '3px 10px',
-                  borderRadius: '12px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  backgroundColor: sev === 'critical' ? '#fdf0ed' : sev === 'high' ? '#fef5e7' : sev === 'medium' ? '#fef9e7' : '#eafaf1',
-                  color: sev === 'critical' ? '#c0392b' : sev === 'high' ? '#d35400' : sev === 'medium' ? '#f39c12' : '#27ae60'
-                }}>
-                  {severityCounts[sev] || 0} {sev}
-                </span>
-              ))}
-            </div>
           </div>
         </div>
+      )}
 
-        {/* Setup instructions accordion */}
-        <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '0', marginTop: '24px', boxShadow: '0 1px 6px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
-          <button
-            onClick={() => setShowSetup(!showSetup)}
+      {/* ── SETUP GUIDE MODAL ── */}
+      {showSetup && (
+        <div
+          onClick={() => setShowSetup(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '24px',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
             style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
               width: '100%',
-              padding: '18px 28px',
+              maxWidth: '640px',
+              maxHeight: '82vh',
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: 600,
-              color: '#1a1a2e',
-              textAlign: 'left' as const
+              flexDirection: 'column',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
             }}
           >
-            <span>Setup Instructions</span>
-            <span style={{ color: '#9ca3af' }}>{showSetup ? '▲' : '▼'}</span>
-          </button>
-          {showSetup && (
-            <div style={{ padding: '0 28px 24px', borderTop: '1px solid #f3f4f6' }}>
-
-              {/* Option A — External Client App (Spring '25+) */}
-              <div style={{ marginTop: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', color: '#1a1a2e' }}>Option A — External Client App</h3>
-                  <span style={{ backgroundColor: '#dbeafe', color: '#1a56db', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>Spring '25+ Orgs</span>
-                </div>
-                <ol style={{ paddingLeft: '20px', margin: '0', lineHeight: '2', fontSize: '0.875rem', color: '#374151' }}>
-                  <li>In Setup, search for <strong>External Client Apps</strong> and click <strong>New External Client App</strong></li>
-                  <li>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>) and Contact Email</li>
-                  <li>Under <strong>OAuth Settings</strong>, enable OAuth and set Callback URL to:<br />
-                    <code style={{ fontSize: '0.8rem', backgroundColor: '#f3f4f6', padding: '1px 6px', borderRadius: '4px' }}>https://sf-sharing-analyzer-production.up.railway.app/auth/callback</code>
-                  </li>
-                  <li>Add OAuth Scopes: <strong>Manage user data via APIs (api)</strong> and <strong>Perform requests at any time (refresh_token, offline_access)</strong></li>
-                  <li>Save — no wait time required</li>
-                  <li>Open the app, go to <strong>OAuth Settings</strong> and copy the <strong>Client ID</strong> (Consumer Key) and <strong>Client Secret</strong> (Consumer Secret)</li>
-                </ol>
-              </div>
-
-              <div style={{ borderTop: '1px solid #f3f4f6', margin: '20px 0' }} />
-
-              {/* Option B — Connected App (All Orgs) */}
+            <div style={{
+              padding: '20px 24px 16px',
+              borderBottom: '1px solid #f0f0f0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              flexShrink: 0,
+              background: 'linear-gradient(135deg, #032D60 0%, #0070D2 100%)',
+              color: 'white',
+            }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                  <h3 style={{ margin: 0, fontSize: '0.95rem', color: '#1a1a2e' }}>Option B — Connected App</h3>
-                  <span style={{ backgroundColor: '#f0fdf4', color: '#16a34a', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>All Orgs</span>
-                </div>
-                <ol style={{ paddingLeft: '20px', margin: '0', lineHeight: '2', fontSize: '0.875rem', color: '#374151' }}>
-                  <li>In Setup, search for <strong>App Manager</strong> and click <strong>New Connected App</strong></li>
-                  <li>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>) and Contact Email</li>
-                  <li>Check <strong>Enable OAuth Settings</strong></li>
-                  <li>Set Callback URL to:<br />
-                    <code style={{ fontSize: '0.8rem', backgroundColor: '#f3f4f6', padding: '1px 6px', borderRadius: '4px' }}>https://sf-sharing-analyzer-production.up.railway.app/auth/callback</code>
-                  </li>
-                  <li>Add OAuth Scopes: <strong>Access and manage your data (api)</strong> and <strong>Perform requests at any time (refresh_token)</strong></li>
-                  <li>Save, wait 2–10 minutes for the app to activate</li>
-                  <li>Copy the <strong>Consumer Key</strong> and <strong>Consumer Secret</strong> into the form on the left</li>
-                </ol>
+                <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem', fontWeight: 700 }}>Setup Guide</h3>
+                <p style={{ margin: 0, fontSize: '0.8rem', opacity: 0.75 }}>
+                  Register the app once per Salesforce org you want to analyze
+                </p>
+              </div>
+              <button
+                onClick={() => setShowSetup(false)}
+                style={{
+                  background: 'rgba(255,255,255,0.2)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '28px',
+                  height: '28px',
+                  fontSize: '1.1rem',
+                  cursor: 'pointer',
+                  color: 'white',
+                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >×</button>
+            </div>
+            <div style={{ overflowY: 'auto', padding: '20px 24px 28px', fontSize: '0.875rem', color: '#2c3e50', lineHeight: 1.6 }}>
+              <div style={{ backgroundColor: '#f0f7ff', borderRadius: '8px', padding: '14px 16px', marginBottom: '20px', border: '1px solid #cce0ff' }}>
+                <p style={{ margin: '0 0 8px', fontWeight: 600, color: '#0070D2' }}>How to tell which setup your org uses</p>
+                <p style={{ margin: '0 0 4px' }}>
+                  <strong>External Client App</strong> — newer orgs (Spring '25+). Go to Setup and search for <strong>"External Client Apps"</strong>. If it appears, use Option A.
+                </p>
+                <p style={{ margin: 0 }}>
+                  <strong>Connected App</strong> — older orgs. Go to Setup → <strong>App Manager</strong>. If you see a <strong>"New Connected App"</strong> button, use Option B.
+                </p>
               </div>
 
-              <p style={{ fontSize: '0.82rem', color: '#9ca3af', margin: '20px 0 0' }}>
+              <h4 style={{ margin: '0 0 10px', fontSize: '0.9rem', color: '#032D60', borderBottom: '2px solid #0070D2', paddingBottom: '6px' }}>
+                Option A — External Client App (newer orgs, Spring '25+)
+              </h4>
+              <ol style={{ margin: '0 0 20px', paddingLeft: '20px' }}>
+                {([
+                  <>Log in as Administrator → <strong>Setup → External Client Apps → New</strong></>,
+                  <>Fill in: <strong>Label:</strong> SF Sharing Analyzer · <strong>API Name:</strong> SF_Sharing_Analyzer · <strong>Contact Email:</strong> your email</>,
+                  <>Under <strong>OAuth Settings</strong>, check <strong>Enable OAuth</strong></>,
+                  <>Set <strong>Callback URL</strong> to:<br />
+                    <code style={{ display: 'inline-block', marginTop: '4px', padding: '4px 8px', backgroundColor: '#f4f4f4', borderRadius: '4px', fontSize: '0.8rem', color: '#c0392b', wordBreak: 'break-all' }}>
+                      https://sf-sharing-analyzer-production.up.railway.app/auth/callback
+                    </code>
+                  </>,
+                  <>Under <strong>OAuth Scopes</strong>, add: <em>Access and manage your data (api)</em> and <em>Perform requests on your behalf at any time (refresh_token, offline_access)</em></>,
+                  <>Click <strong>Save</strong> — no wait time required</>,
+                  <>Go back to the External Client App → <strong>View Consumer Details</strong> to retrieve your <strong>Consumer Key</strong> (Client ID) and <strong>Consumer Secret</strong></>,
+                ] as React.ReactNode[]).map((step, i) => (
+                  <li key={i} style={{ marginBottom: '8px' }}>{step}</li>
+                ))}
+              </ol>
+
+              <h4 style={{ margin: '0 0 10px', fontSize: '0.9rem', color: '#032D60', borderBottom: '2px solid #16a34a', paddingBottom: '6px' }}>
+                Option B — Connected App (all orgs)
+              </h4>
+              <ol style={{ margin: '0 0 20px', paddingLeft: '20px' }}>
+                {([
+                  <>Log in as Administrator → <strong>Setup → App Manager → New Connected App</strong></>,
+                  <>Fill in App Name (e.g., <em>SF Sharing Analyzer</em>) and Contact Email</>,
+                  <>Check <strong>Enable OAuth Settings</strong></>,
+                  <>Set <strong>Callback URL</strong> to:<br />
+                    <code style={{ display: 'inline-block', marginTop: '4px', padding: '4px 8px', backgroundColor: '#f4f4f4', borderRadius: '4px', fontSize: '0.8rem', color: '#c0392b', wordBreak: 'break-all' }}>
+                      https://sf-sharing-analyzer-production.up.railway.app/auth/callback
+                    </code>
+                  </>,
+                  <>Add OAuth Scopes: <em>Access and manage your data (api)</em> and <em>Perform requests at any time (refresh_token)</em></>,
+                  <>Click <strong>Save</strong> — wait 2–10 minutes for Salesforce to activate the app</>,
+                  <>Copy the <strong>Consumer Key</strong> and <strong>Consumer Secret</strong> into the form</>,
+                ] as React.ReactNode[]).map((step, i) => (
+                  <li key={i} style={{ marginBottom: '8px' }}>{step}</li>
+                ))}
+              </ol>
+
+              <p style={{ fontSize: '0.82rem', color: '#9ca3af', margin: 0 }}>
                 Read-only API access only. No data is stored — all results live in your browser session.
               </p>
             </div>
-          )}
+          </div>
         </div>
-
-
-      </div>
+      )}
     </div>
   );
 };
