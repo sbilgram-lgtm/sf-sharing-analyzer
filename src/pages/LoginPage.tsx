@@ -196,6 +196,25 @@ export const LoginPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Disclaimer box */}
+        <div style={{
+          backgroundColor: '#eaf1fb',
+          border: '1.5px solid #0070d2',
+          borderRadius: '8px',
+          padding: '14px 16px',
+          marginBottom: '24px',
+        }}>
+          <p style={{ margin: '0 0 6px', fontSize: '0.82rem', fontWeight: 700, color: '#032d60', lineHeight: 1.4 }}>
+            Important Disclaimer
+          </p>
+          <p style={{ margin: 0, fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
+            SF Sharing Analyzer is provided "as is," without warranties. Its assessments and recommendations reflect my professional experience as a technical architect but are intended as decision-support guidance, not legal, regulatory, or financial advice.
+          </p>
+          <p style={{ margin: '8px 0 0', fontSize: '0.80rem', color: '#032d60', lineHeight: 1.55 }}>
+            Users are responsible for validating results and adapting recommendations to their specific environment, requirements, and risks. I accept no liability for its use or misuse; by using the software, you accept these terms.
+          </p>
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
 
           {/* Connect form */}
@@ -406,9 +425,6 @@ export const LoginPage: React.FC = () => {
           )}
         </div>
 
-        <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.75rem', color: '#9ca3af' }}>
-          Independent tool — not affiliated with or endorsed by Salesforce, Inc.
-        </div>
 
       </div>
     </div>
