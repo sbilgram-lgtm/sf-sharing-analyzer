@@ -18,15 +18,15 @@ Produces two outputs in a single assessment run:
 | OWD Analysis | 5 |
 | Role Hierarchy | 8 |
 | Territory Management | 5 |
-| Sharing Rules | 9 |
-| Manual Sharing | 3 |
+| Sharing Rules | 10 |
+| Manual Sharing | 4 |
 | Apex Sharing | 7 |
 | Record Teams | 3 |
 | Groups & Queues | 7 |
-| Permission Bypasses | 11 |
+| Permission Bypasses | 15 |
 | Implicit Sharing | 3 |
-| External & Guest Access | 3 |
-| **Total** | **64** |
+| External & Guest Access | 4 |
+| **Total** | **71** |
 
 ## Key Findings This Tool Surfaces
 
@@ -90,6 +90,13 @@ Opens React on `http://localhost:3000`, Express on `http://localhost:3001`.
 | `GROQ_API_KEY` | No | Alternative AI provider |
 
 ## What's New
+
+### October 2026 (71 checks)
+- Added 7 new checks from Salesforce Winter '27 Best Practices (Abbott Laboratories edition):
+  - **Sharing Rules:** Scoping rules inventory — confirm not used as sole security boundary
+  - **Manual Sharing:** Manual shares on Public Read/Write OWD objects (redundant — grants no additional access)
+  - **Permission Bypasses:** Customize Application permission holders; no expiring permission set assignments; no User Access Policies defined
+  - **External & Guest Access:** Criteria-based sharing rules targeting guest users (unauthenticated internet access)
 
 ### October 2026 (64 checks)
 - Added 12 new checks from Salesforce Winter '27 Sharing & Visibility Best Practices:

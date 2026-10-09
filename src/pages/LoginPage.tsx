@@ -46,11 +46,13 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Restriction Rules Configured — Review Access Restrictions', severity: 'low' },
     { title: 'No Restriction Rules Configured — Evaluate Opportunity', severity: 'low' },
     { title: "Sharing Rules Are Redundant with Object's Public OWD", severity: 'low' },
+    { title: 'Scoping Rules Defined — Confirm Not Used as Security Boundary', severity: 'low' },
   ],
   'Manual Sharing': [
     { title: 'Object Has Very High Manual Share Volume (10,000+)', severity: 'high' },
     { title: 'Object Has High Manual Share Volume (1,000+)', severity: 'medium' },
     { title: 'Private OWD Object Relies Heavily on Manual Sharing (500+)', severity: 'medium' },
+    { title: 'Manual Shares Exist on Public Read/Write OWD Objects', severity: 'medium' },
   ],
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high' },
@@ -84,9 +86,13 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Modify All Records Granted on Many Objects (5+)', severity: 'high' },
     { title: 'High Percentage of Active Users Have Org-Wide Sharing Bypass Permissions', severity: 'high' },
     { title: 'Many Users Hold High-Risk Admin Permissions (Author Apex / Manage Users)', severity: 'high' },
+    { title: 'Many Users Hold the Customize Application Permission (10+)', severity: 'high' },
     { title: 'Majority of Sharing Bypass Grants Are via Permission Sets — Harder to Audit', severity: 'medium' },
     { title: 'No Permission Set Groups Defined — Consider Adopting for Access Governance', severity: 'medium' },
     { title: 'Users Hold High-Risk Admin Permissions (Author Apex / Manage Users)', severity: 'medium' },
+    { title: 'Users Hold the Customize Application Permission', severity: 'medium' },
+    { title: 'No Expiring Permission Set Assignments Detected', severity: 'low' },
+    { title: 'No User Access Policies Defined', severity: 'low' },
   ],
   'Implicit Sharing': [
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium' },
@@ -96,6 +102,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   'External & Guest Access': [
     { title: 'Objects Allow External Users to Create/Edit Records', severity: 'critical' },
     { title: 'Objects Are Accessible to External/Guest Users', severity: 'high' },
+    { title: 'Criteria-Based Sharing Rules Target Guest Users', severity: 'high' },
     { title: 'Sharing Sets Grant Access to High-Volume Portal Users', severity: 'medium' },
   ],
 };

@@ -282,7 +282,7 @@ app.get('/api/assess/territories', requireAuth, async (req, res) => {
 app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes, restrictionRulesRes] = await Promise.all([
+    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes, restrictionRulesRes, scopingRulesRes] = await Promise.all([
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM OwnerSharingRule LIMIT 2000"
@@ -294,6 +294,9 @@ app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
       safeQuery(conn, "SELECT Id FROM Group WHERE DeveloperName = 'AllInternalUsers' LIMIT 1"),
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM RestrictionRule LIMIT 500"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM ScopingRule LIMIT 200"
       ).catch(() => ({ records: [] }))
     ]);
     const allInternalGroupId = (allInternalGroupRes.records[0] || {}).Id || null;
@@ -301,7 +304,8 @@ app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
       ownerRules: ownerRulesRes.records || [],
       criteriaRules: criteriaRulesRes.records || [],
       allInternalGroupId,
-      restrictionRules: restrictionRulesRes.records || []
+      restrictionRules: restrictionRulesRes.records || [],
+      scopingRules: scopingRulesRes.records || []
     });
   } catch (err) {
     console.error('Sharing rules assessment error:', err);
@@ -461,7 +465,11 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       totalUsersRes,
       psgCountRes,
       authorApexUsersRes,
-      manageUsersUsersRes
+      manageUsersUsersRes,
+      customizeAppProfileRes,
+      customizeAppPermSetRes,
+      expiringPsaRes,
+      uapCountRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Profile.Name FROM User " +
@@ -496,7 +504,18 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       safeQuery(conn,
         "SELECT AssigneeId, Assignee.Name FROM PermissionSetAssignment " +
         "WHERE PermissionSet.PermissionsManageUsers = true AND Assignee.IsActive = true LIMIT 500"
-      ).catch(() => ({ records: [] }))
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, Profile.Name FROM User " +
+        "WHERE IsActive = true AND Profile.PermissionsCustomizeApplication = true LIMIT 500"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT AssigneeId, Assignee.Name, PermissionSet.Name FROM PermissionSetAssignment " +
+        "WHERE PermissionSet.PermissionsCustomizeApplication = true AND Assignee.IsActive = true " +
+        "AND PermissionSet.IsOwnedByProfile = false LIMIT 500"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn, "SELECT COUNT(Id) FROM PermissionSetAssignment WHERE ExpirationDate != null").catch(() => ({ records: [{ expr0: 0 }] })),
+      safeQuery(conn, "SELECT COUNT(Id) FROM UserAccessPolicy").catch(() => ({ records: [{ expr0: 0 }] }))
     ]);
 
     const vadUserMap = new Map();
@@ -530,6 +549,17 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       manageUsersUserMap.set(psa.AssigneeId, { Id: psa.AssigneeId, Name: psa.Assignee?.Name || psa.AssigneeId });
     }
 
+    const customizeAppMap = new Map();
+    for (const u of (customizeAppProfileRes.records || [])) {
+      customizeAppMap.set(u.Id, { Id: u.Id, Name: u.Name, Profile: u.Profile, grantSource: 'Profile' });
+    }
+    for (const psa of (customizeAppPermSetRes.records || [])) {
+      const id = psa.AssigneeId;
+      if (!customizeAppMap.has(id)) {
+        customizeAppMap.set(id, { Id: id, Name: psa.Assignee?.Name || id, Profile: { Name: psa.PermissionSet?.Name || 'Permission Set' }, grantSource: 'Permission Set' });
+      }
+    }
+
     res.json({
       viewAllDataUsers: Array.from(vadUserMap.values()),
       modifyAllDataUsers: Array.from(madUserMap.values()),
@@ -538,7 +568,10 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       totalActiveUsers: (totalUsersRes.records[0] || {}).expr0 || 0,
       permissionSetGroupCount: (psgCountRes.records[0] || {}).expr0 || 0,
       authorApexUsers: Array.from(authorApexUserMap.values()),
-      manageUsersUsers: Array.from(manageUsersUserMap.values())
+      manageUsersUsers: Array.from(manageUsersUserMap.values()),
+      customizeAppUsers: Array.from(customizeAppMap.values()),
+      expiringPsaCount: (expiringPsaRes.records[0] || {}).expr0 || 0,
+      userAccessPolicyCount: (uapCountRes.records[0] || {}).expr0 || 0
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);
@@ -567,19 +600,23 @@ app.get('/api/assess/implicit-sharing', requireAuth, async (req, res) => {
 app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [guestProfileRes, externalEntitiesRes, sharingSetRes] = await Promise.all([
+    const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
         "FROM EntityDefinition " +
         "WHERE ExternalSharingModel != 'Private' AND IsCustomizable = true LIMIT 200"
       ),
-      safeToolingQuery(conn, "SELECT Id, Name FROM SharingSet LIMIT 100").catch(() => ({ records: [] }))
+      safeToolingQuery(conn, "SELECT Id, Name FROM SharingSet LIMIT 100").catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM CriteriaBasedSharingRule WHERE SharedToType = 'GuestUser' LIMIT 200"
+      ).catch(() => ({ records: [] }))
     ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
       externalEntities: externalEntitiesRes.records || [],
-      sharingSets: sharingSetRes.records || []
+      sharingSets: sharingSetRes.records || [],
+      guestSharingRules: guestSharingRulesRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);

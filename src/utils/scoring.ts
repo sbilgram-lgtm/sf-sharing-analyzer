@@ -431,6 +431,22 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
     }
   }
 
+  // Scoping rules inventory
+  const scopingRules: any[] = (data as any).scopingRules || [];
+  if (scopingRules.length > 0) {
+    const byObject = new Map<string, number>();
+    scopingRules.forEach((r: any) => {
+      const obj = r.EntityDefinition?.QualifiedApiName || 'Unknown';
+      byObject.set(obj, (byObject.get(obj) || 0) + 1);
+    });
+    findings.push(createFinding(CAT, 'low',
+      `${scopingRules.length} Scoping Rule${scopingRules.length > 1 ? 's Are' : ' Is'} Defined — Confirm Not Used as Security Boundary`,
+      'Scoping rules control which records users see in supported UI list contexts (list views, related lists) but do not restrict record access in reports, SOQL, SOSL, APIs, or search. They are a user-experience control, not a security control. If scoping rules are being relied upon to restrict data access, this represents a security gap.',
+      'Review each scoping rule. Confirm it is documented as a UI productivity control only. Ensure any data security requirement is enforced through OWD, sharing rules, restriction rules, or field-level security — not scoping rules.',
+      { records: Array.from(byObject.entries()).map(([obj, count]) => ({ name: obj, detail: `${count} scoping rule${count > 1 ? 's' : ''}` })) }
+    ));
+  }
+
   // Build summary for inventory
   const summary = Array.from(rulesByObject.entries()).map(([object, counts]) => ({
     object,
@@ -486,6 +502,18 @@ export function assessManualSharing(data: { manualShares: { object: string; coun
         'When an object has a Private OWD but high volumes of manual shares, it indicates users are manually granting access because the sharing model does not provide it automatically.',
         'Analyze who is performing manual shares and why. Design sharing rules, role hierarchy adjustments, or Apex sharing to replace manual grants with automated access.',
         { records: compensatingObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} manual shares, OWD: Private` })) }
+      ));
+    }
+
+    // Manual shares on Public OWD objects — redundant
+    const publicOwdObjects = new Set(owdEntities.filter((e: any) => e.InternalSharingModel === 'ReadWrite').map((e: any) => e.QualifiedApiName));
+    const redundantShares = manualShares.filter(s => s.count > 0 && publicOwdObjects.has(s.object));
+    if (redundantShares.length > 0) {
+      findings.push(createFinding(CAT, 'medium',
+        `${redundantShares.length} Object${redundantShares.length > 1 ? 's Have' : ' Has'} Manual Shares But OWD Is Already Public Read/Write`,
+        'Manual share records on objects with Public Read/Write OWD grant no additional access — all internal users can already see and edit every record. These shares add sharing recalculation overhead and signal that the OWD may have been opened after the manual shares were created without cleaning up.',
+        'Review manual shares on these objects. If Public R/W OWD is intentional, delete the redundant manual share records. If the OWD should be tighter, change it back to Private and validate the manual shares provide the intended access.',
+        { records: redundantShares.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} manual shares, OWD: Public Read/Write` })) }
       ));
     }
   }
@@ -918,6 +946,46 @@ export function assessPermissionBypasses(data: {
     ));
   }
 
+  // Customize Application
+  const customizeAppUsers: any[] = (data as any).customizeAppUsers || [];
+  if (customizeAppUsers.length > 10) {
+    findings.push(createFinding(CAT, 'high',
+      `${customizeAppUsers.length} Users Hold the Customize Application Permission`,
+      'Customize Application grants the ability to modify org metadata, create custom objects, edit page layouts, manage flows, and alter automation behavior. It is equivalent to partial system administrator access and can be used to change the runtime context of sharing enforcement.',
+      'Restrict Customize Application to declared administrators and senior developers. Remove from users who do not actively manage org configuration. This permission should appear in the access exception register.',
+      { records: customizeAppUsers.slice(0, 50).map((u: any) => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${u.grantSource || 'Profile'})` })) }
+    ));
+  } else if (customizeAppUsers.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${customizeAppUsers.length} User${customizeAppUsers.length > 1 ? 's Hold' : ' Holds'} the Customize Application Permission`,
+      'Customize Application grants broad metadata change capability including flow management and automation context control. Each holder can modify sharing-relevant configuration.',
+      'Confirm each holder has a current business need. Document in the access exception register.',
+      { records: customizeAppUsers.map((u: any) => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} (${u.grantSource || 'Profile'})` })) }
+    ));
+  }
+
+  // Expiring PSA check
+  const expiringPsaCount: number = (data as any).expiringPsaCount || 0;
+  if (expiringPsaCount === 0) {
+    findings.push(createFinding(CAT, 'low',
+      'No Expiring Permission Set Assignments Detected — Temporary Access Governance Gap',
+      'Salesforce best practice recommends using expiration dates on permission set assignments for break-glass, project, support, and elevated temporary access. Zero expiring assignments suggests all elevated access grants are permanent with no built-in review trigger.',
+      'Audit permission set assignments for elevated and temporary roles. Add expiration dates to break-glass, contractor, and project-based assignments. Establish a review cadence for assignments without expiration.',
+      {}
+    ));
+  }
+
+  // User Access Policies
+  const uapCount: number = (data as any).userAccessPolicyCount || 0;
+  if (uapCount === 0) {
+    findings.push(createFinding(CAT, 'low',
+      'No User Access Policies Defined',
+      'User Access Policies automate permission set, group, and queue assignments based on user attributes. Without UAPs, access assignments are manual — increasing the risk of inconsistent provisioning, forgotten de-provisioning, and assignment sprawl over time.',
+      'Define User Access Policies for common job functions and personas. Use UAPs to automate assignment of permission set groups when users match role or department criteria. This reduces manual overhead and access inconsistency.',
+      {}
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -984,7 +1052,7 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
 }
 
 // ── External & Guest Access ───────────────────────────────────────────────────
-export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[] }): CategoryResult & { stats: any } {
+export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[] }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'External & Guest Access';
   const guestProfiles: any[] = data.guestProfiles || [];
@@ -1020,6 +1088,22 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Sharing sets grant record access to High-Volume Portal (HVP) users based on field relationships — these users are excluded from the standard sharing model. Sharing sets can grant broad access if the access-mapping field is widely populated.',
       'Review each sharing set. Confirm the access mapping field correctly scopes access. Ensure the access level (Read vs Read/Write) matches the minimum necessary for the portal use case.',
       { records: sharingSets.map((s: any) => ({ name: s.name || s.Name, detail: `${s.accessLevel || 'Unknown'} access` })) }
+    ));
+  }
+
+  // Guest user sharing rules
+  const guestSharingRules: any[] = data.guestSharingRules || [];
+  if (guestSharingRules.length > 0) {
+    const byObject = new Map<string, number>();
+    guestSharingRules.forEach((r: any) => {
+      const obj = r.EntityDefinition?.QualifiedApiName || 'Unknown';
+      byObject.set(obj, (byObject.get(obj) || 0) + 1);
+    });
+    findings.push(createFinding(CAT, 'high',
+      `${guestSharingRules.length} Criteria-Based Sharing Rule${guestSharingRules.length > 1 ? 's Target' : ' Targets'} Guest Users`,
+      'Guest user sharing rules grant record access to unauthenticated internet users. Each rule represents a deliberate decision to expose records to the public internet. These rules require the highest level of scrutiny — the criteria must be narrow, the access level appropriate, and the business justification explicit and formally approved.',
+      'Review every guest user sharing rule. Confirm the criteria explicitly select only records intended for public access. Confirm no sensitive fields are exposed via the shared records. Document the business justification and review cadence for each rule.',
+      { records: Array.from(byObject.entries()).map(([obj, count]) => ({ name: obj, detail: `${count} guest user sharing rule${count > 1 ? 's' : ''}` })) }
     ));
   }
 
