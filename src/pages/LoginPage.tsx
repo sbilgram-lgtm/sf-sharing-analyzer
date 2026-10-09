@@ -39,8 +39,12 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   'Sharing Rules': [
     { title: 'Sharing Rules Target All Internal Users', severity: 'high' },
     { title: 'Total Sharing Rules — Recalculation Risk (500+)', severity: 'high' },
+    { title: 'Object Approaching 300 Sharing Rules Platform Limit (250+)', severity: 'high' },
     { title: 'Total Sharing Rules — Review for Redundancy (200+)', severity: 'medium' },
     { title: 'Object Has High Number of Sharing Rules (100+)', severity: 'medium' },
+    { title: 'Object Approaching 50 Criteria-Based Sharing Rule Limit (40+)', severity: 'medium' },
+    { title: 'Restriction Rules Configured — Review Access Restrictions', severity: 'low' },
+    { title: 'No Restriction Rules Configured — Evaluate Opportunity', severity: 'low' },
     { title: 'Sharing Rules Are Redundant with Object\'s Public OWD', severity: 'low' },
   ],
   'Manual Sharing': [
@@ -50,9 +54,11 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   ],
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high' },
+    { title: 'Many Apex Classes Have No Sharing Declaration (50+)', severity: 'high' },
     { title: 'Apex Classes Run Without Sharing Enforcement (5+)', severity: 'medium' },
-    { title: 'Custom Apex Sharing Reasons Defined', severity: 'low' },
+    { title: 'Apex Classes Have No Sharing Declaration', severity: 'medium' },
     { title: 'Apex-Managed Share Records Exceed 5,000 on an Object', severity: 'medium' },
+    { title: 'Custom Apex Sharing Reasons Defined', severity: 'low' },
     { title: 'Custom Sharing Reasons Have No Corresponding Active Apex Class', severity: 'low' },
   ],
   'Record Teams': [
@@ -62,19 +68,25 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   ],
   'Groups & Queues': [
     { title: 'Public Groups Include All Internal Users', severity: 'high' },
-    { title: 'Public Groups Have No Members', severity: 'low' },
     { title: 'Queues Have No Members — Work Items Cannot Be Assigned', severity: 'medium' },
+    { title: 'Queues Have "Include Bosses" Enabled on Private OWD Objects', severity: 'medium' },
+    { title: 'Nested Group Memberships Detected', severity: 'medium' },
+    { title: 'Public Groups Have No Members', severity: 'low' },
     { title: 'Queues Configured on Public OWD Objects — Redundant Access Mechanism', severity: 'low' },
+    { title: 'Nested Group Membership Detected (low volume)', severity: 'low' },
   ],
   'Permission Bypasses': [
     { title: 'Many Users Have View All Data — Complete Sharing Bypass (5+)', severity: 'critical' },
-    { title: 'Users Have View All Data — Complete Sharing Bypass', severity: 'high' },
     { title: 'Many Users Have Modify All Data — Complete Sharing Bypass (5+)', severity: 'critical' },
+    { title: 'Users Have View All Data — Complete Sharing Bypass', severity: 'high' },
     { title: 'Users Have Modify All Data — Complete Sharing Bypass', severity: 'high' },
     { title: 'View All Records Granted on Many Objects (10+)', severity: 'high' },
     { title: 'Modify All Records Granted on Many Objects (5+)', severity: 'high' },
     { title: 'High Percentage of Active Users Have Org-Wide Sharing Bypass Permissions', severity: 'high' },
+    { title: 'Many Users Hold High-Risk Admin Permissions (Author Apex / Manage Users)', severity: 'high' },
     { title: 'Majority of Sharing Bypass Grants Are via Permission Sets — Harder to Audit', severity: 'medium' },
+    { title: 'No Permission Set Groups Defined — Consider Adopting for Access Governance', severity: 'medium' },
+    { title: 'Users Hold High-Risk Admin Permissions (Author Apex / Manage Users)', severity: 'medium' },
   ],
   'Implicit Sharing': [
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium' },

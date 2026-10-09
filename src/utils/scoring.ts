@@ -374,7 +374,14 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
 
   Array.from(rulesByObject.entries()).forEach(([obj, counts]) => {
     const objTotal = counts.ownerCount + counts.criteriaCount;
-    if (objTotal > 100) {
+    if (objTotal > 250) {
+      findings.push(createFinding(CAT, 'high',
+        `${obj} Is Approaching the 300 Sharing Rules Per Object Platform Limit`,
+        `With ${objTotal} sharing rules, ${obj} is within 50 rules of the Salesforce platform limit of 300 sharing rules per object. Reaching the limit will prevent new rules from being created and may cause org configuration errors.`,
+        `Urgently audit and consolidate ${obj} sharing rules. Merge criteria-based rules where possible and review whether any rules are redundant with the role hierarchy.`,
+        { count: objTotal }
+      ));
+    } else if (objTotal > 100) {
       findings.push(createFinding(CAT, 'medium',
         `${obj} Has ${objTotal} Sharing Rules — High Recalculation Risk`,
         `Objects with many sharing rules require more time to recalculate sharing when records change owners or when hierarchy changes occur.`,
@@ -382,7 +389,33 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
         { count: objTotal }
       ));
     }
+    if (counts.criteriaCount > 40) {
+      findings.push(createFinding(CAT, 'medium',
+        `${obj} Is Approaching the 50 Criteria-Based Sharing Rule Per Object Limit`,
+        `${obj} has ${counts.criteriaCount} criteria-based sharing rules, approaching the platform limit of 50 per object. Exceeding this limit blocks creation of further criteria-based rules.`,
+        `Review and consolidate criteria-based sharing rules for ${obj}. Combine overlapping criteria where possible.`,
+        { count: counts.criteriaCount }
+      ));
+    }
   });
+
+  // Restriction rules inventory
+  const restrictionRules: any[] = (data as any).restrictionRules || [];
+  if (restrictionRules.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${restrictionRules.length} Restriction Rule${restrictionRules.length > 1 ? 's Are' : ' Is'} Configured`,
+      'Restriction rules further limit record visibility below what OWD settings allow. They are powerful but can have unexpected side effects if not carefully documented and reviewed.',
+      'Document all restriction rules in your sharing architecture. Confirm each rule is still intentional and correctly scoped. Test that the intended users can still access required records.',
+      { records: restrictionRules.map((r: any) => ({ name: r.DeveloperName, detail: r.EntityDefinition?.QualifiedApiName || 'Unknown Object' })) }
+    ));
+  } else {
+    findings.push(createFinding(CAT, 'low',
+      'No Restriction Rules Configured — Evaluate Opportunity',
+      'Restriction rules allow limiting record visibility below OWD for specific user groups. If any objects have users who should see fewer records than the OWD grants, restriction rules may be appropriate.',
+      'Evaluate whether any object would benefit from restriction rules to limit access for specific profiles or permission sets. Particularly useful for compliance-sensitive data.',
+      {}
+    ));
+  }
 
   // Redundant sharing rules where OWD is already Public Read/Write
   if (owdEntities && owdEntities.length > 0) {
@@ -476,6 +509,23 @@ export function assessApexSharing(data: {
   const CAT = 'Apex Sharing';
   const withoutSharing = data.withoutSharingClasses || [];
   const customReasons = data.customSharingReasons || [];
+  const noSharingDecl: { name: string; id: string }[] = (data as any).noSharingDeclarationClasses || [];
+
+  if (noSharingDecl.length > 50) {
+    findings.push(createFinding(CAT, 'high',
+      `${noSharingDecl.length} Apex Classes Have No Sharing Declaration`,
+      "Apex classes with no sharing declaration default to 'without sharing' behavior in many execution contexts. Each undeclared class is a potential data exposure vector where record-level security is silently bypassed.",
+      "Explicitly declare 'with sharing', 'without sharing', or 'inherited sharing' on every class. 'inherited sharing' is the safest default when the correct context is unknown.",
+      { records: noSharingDecl.slice(0, 50).map(c => ({ name: c.name, detail: 'No sharing declaration' })) }
+    ));
+  } else if (noSharingDecl.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${noSharingDecl.length} Apex Class${noSharingDecl.length > 1 ? 'es Have' : ' Has'} No Sharing Declaration`,
+      "Apex classes with no sharing declaration inherit the sharing context of their caller, which can lead to unexpected data access when the class is invoked from different entry points.",
+      "Add 'with sharing', 'without sharing', or 'inherited sharing' to each class. This makes the sharing behavior explicit and auditable.",
+      { records: noSharingDecl.map(c => ({ name: c.name, detail: 'No sharing declaration' })) }
+    ));
+  }
 
   if (withoutSharing.length > 20) {
     findings.push(createFinding(CAT, 'high',
@@ -675,6 +725,51 @@ export function assessGroupsQueues(data: {
     }
   }
 
+  // Queue DoesIncludeBosses on Private OWD objects
+  if (owdEntities && owdEntities.length > 0 && queues.length > 0) {
+    const privateOwdQualNames = new Set(
+      owdEntities
+        .filter((e: any) => e.InternalSharingModel === 'Private')
+        .map((e: any) => e.QualifiedApiName)
+    );
+    const queueObjectMap = new Map<string, string[]>();
+    for (const qo of (data.queueObjects || [])) {
+      const existing = queueObjectMap.get(qo.QueueId) || [];
+      queueObjectMap.set(qo.QueueId, [...existing, qo.SobjectType]);
+    }
+    const queuesWithBossesOnPrivate = queues.filter((q: any) => {
+      if (!q.DoesIncludeBosses) return false;
+      const qObjs = queueObjectMap.get(q.Id) || [];
+      return qObjs.some((obj: string) => privateOwdQualNames.has(obj));
+    });
+    if (queuesWithBossesOnPrivate.length > 0) {
+      findings.push(createFinding(CAT, 'medium',
+        `${queuesWithBossesOnPrivate.length} Queue${queuesWithBossesOnPrivate.length > 1 ? 's Have' : ' Has'} "Include Bosses" Enabled on Private OWD Objects`,
+        '"Include Bosses in Queue" causes all role hierarchy superiors of queue members to also gain visibility to queue records. On Private OWD objects, this can unexpectedly expose records to senior managers who were not intended to see them.',
+        'Review queue settings. Disable "Include Bosses" unless role hierarchy visibility is explicitly required. If visibility is needed for managers, consider sharing rules instead.',
+        { records: queuesWithBossesOnPrivate.map((q: any) => ({ name: q.Name, detail: 'DoesIncludeBosses = true, object has Private OWD' })) }
+      ));
+    }
+  }
+
+  // Nested public groups
+  const nestedGroupMembers: any[] = (data as any).nestedGroupMembers || [];
+  if (nestedGroupMembers.length > 5) {
+    findings.push(createFinding(CAT, 'medium',
+      `${nestedGroupMembers.length} Nested Group Memberships Detected`,
+      'Public groups that contain other groups as members create complex, difficult-to-audit membership chains. When used in sharing rules, the actual set of users receiving access can be opaque and may expand unexpectedly when parent group membership changes.',
+      'Document nested group structures. Flatten where possible. Conduct periodic audits of effective membership for groups used in sharing rules.',
+      { count: nestedGroupMembers.length }
+    ));
+  } else if (nestedGroupMembers.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${nestedGroupMembers.length} Nested Group Membership${nestedGroupMembers.length > 1 ? 's' : ''} Detected`,
+      'Groups containing other groups as members create membership chains that require careful documentation to audit effectively.',
+      'Review nested group structures and document the effective membership for groups used in sharing rules.',
+      { count: nestedGroupMembers.length }
+    ));
+  }
+
   const publicGroups = groups.filter(g => g.Type === 'Regular');
   return {
     category: CAT,
@@ -779,6 +874,48 @@ export function assessPermissionBypasses(data: {
         { count: permSetGrants }
       ));
     }
+  }
+
+  // Permission Set Groups
+  const psgCount: number = (data as any).permissionSetGroupCount || 0;
+  if (psgCount === 0) {
+    findings.push(createFinding(CAT, 'medium',
+      'No Permission Set Groups Defined — Consider Adopting for Access Governance',
+      'Permission Set Groups bundle related permission sets into a single assignment, reducing assignment sprawl and making it easier to audit who has access to what. Orgs without PSGs tend to accumulate many individual permission set assignments that are hard to govern.',
+      'Define Permission Set Groups for common job functions. This simplifies assignment management, reduces the risk of over-permissioning, and makes access audits faster and more reliable.',
+      {}
+    ));
+  }
+
+  // Author Apex and Manage Users — high-risk admin permissions
+  const authorApexUsers: any[] = (data as any).authorApexUsers || [];
+  const manageUsersUsersList: any[] = (data as any).manageUsersUsers || [];
+  const highRiskUserMap = new Map<string, { Id: string; Name: string; permissions: string[] }>();
+  for (const u of authorApexUsers) {
+    highRiskUserMap.set(u.Id, { Id: u.Id, Name: u.Name, permissions: ['Author Apex'] });
+  }
+  for (const u of manageUsersUsersList) {
+    if (highRiskUserMap.has(u.Id)) {
+      highRiskUserMap.get(u.Id)!.permissions.push('Manage Users');
+    } else {
+      highRiskUserMap.set(u.Id, { Id: u.Id, Name: u.Name, permissions: ['Manage Users'] });
+    }
+  }
+  const highRiskUserList = Array.from(highRiskUserMap.values());
+  if (highRiskUserList.length > 10) {
+    findings.push(createFinding(CAT, 'high',
+      `${highRiskUserList.length} Users Hold High-Risk Admin Permissions (Author Apex / Manage Users)`,
+      "Author Apex allows writing code that can bypass the sharing model using 'without sharing'. Manage Users allows changing other users' profiles and permission assignments, enabling privilege escalation. Having these widely granted significantly weakens sharing governance.",
+      'Restrict Author Apex to a small number of certified developers. Restrict Manage Users to dedicated user-admin accounts. Review all holders and remove from anyone who no longer requires it.',
+      { records: highRiskUserList.slice(0, 50).map(u => ({ name: u.Name, detail: u.permissions.join(', ') })) }
+    ));
+  } else if (highRiskUserList.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${highRiskUserList.length} User${highRiskUserList.length > 1 ? 's Hold' : ' Holds'} High-Risk Admin Permissions (Author Apex / Manage Users)`,
+      "Author Apex and Manage Users can be used to circumvent or manipulate the sharing model. Even a small number of holders warrants review.",
+      "Review each user. Confirm Author Apex is restricted to developers who actively write code. Confirm Manage Users is restricted to designated user administrators.",
+      { records: highRiskUserList.map(u => ({ name: u.Name, detail: u.permissions.join(', ') })) }
+    ));
   }
 
   return {

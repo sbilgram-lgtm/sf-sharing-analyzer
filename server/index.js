@@ -282,7 +282,7 @@ app.get('/api/assess/territories', requireAuth, async (req, res) => {
 app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes] = await Promise.all([
+    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes, restrictionRulesRes] = await Promise.all([
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM OwnerSharingRule LIMIT 2000"
@@ -291,13 +291,17 @@ app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM CriteriaBasedSharingRule LIMIT 2000"
       ),
-      safeQuery(conn, "SELECT Id FROM Group WHERE DeveloperName = 'AllInternalUsers' LIMIT 1")
+      safeQuery(conn, "SELECT Id FROM Group WHERE DeveloperName = 'AllInternalUsers' LIMIT 1"),
+      safeToolingQuery(conn,
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM RestrictionRule LIMIT 500"
+      ).catch(() => ({ records: [] }))
     ]);
     const allInternalGroupId = (allInternalGroupRes.records[0] || {}).Id || null;
     res.json({
       ownerRules: ownerRulesRes.records || [],
       criteriaRules: criteriaRulesRes.records || [],
-      allInternalGroupId
+      allInternalGroupId,
+      restrictionRules: restrictionRulesRes.records || []
     });
   } catch (err) {
     console.error('Sharing rules assessment error:', err);
@@ -346,6 +350,12 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       /new\s+\w+Share\s*\(/i.test(c.Body || '') ||
       /\b\w+Share\b\s*\w+\s*=\s*new\b/i.test(c.Body || '')
     );
+    const noSharingDecl = classes.filter(c => {
+      const body = c.Body || '';
+      const hasSharing = /\bwith\s+sharing\b|\bwithout\s+sharing\b|\binherited\s+sharing\b/i.test(body);
+      const isTest = /@IsTest\b/i.test(body);
+      return !hasSharing && !isTest;
+    });
 
     const standardObjects = ['Account', 'Case', 'Opportunity', 'Contact', 'Lead', 'Campaign'];
     const shareVolumeResults = await Promise.all(
@@ -360,6 +370,7 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
     res.json({
       withoutSharingClasses: withoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       sharesCreatingClasses: createsShares.map(c => ({ name: c.Name, id: c.Id })),
+      noSharingDeclarationClasses: noSharingDecl.map(c => ({ name: c.Name, id: c.Id })),
       customSharingReasons: sharingReasonsRes.records || [],
       apexShareVolumes: shareVolumeResults
     });
@@ -408,7 +419,7 @@ app.get('/api/assess/record-teams', requireAuth, async (req, res) => {
 app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [groupsRes, groupMembersRes, queuesRes, queueSobjectsRes] = await Promise.all([
+    const [groupsRes, groupMembersRes, queuesRes, queueSobjectsRes, nestedGroupMembersRes] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Type, DeveloperName FROM Group WHERE Type IN ('Regular', 'Queue') LIMIT 1000"
       ),
@@ -416,17 +427,22 @@ app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
         "SELECT GroupId, COUNT(Id) memberCount FROM GroupMember GROUP BY GroupId LIMIT 1000"
       ),
       safeQuery(conn,
-        "SELECT Id, Name FROM Group WHERE Type = 'Queue' LIMIT 200"
+        "SELECT Id, Name, DoesIncludeBosses FROM Group WHERE Type = 'Queue' LIMIT 200"
       ),
       safeQuery(conn,
         "SELECT QueueId, SobjectType FROM QueueSobject LIMIT 1000"
-      )
+      ),
+      safeQuery(conn,
+        "SELECT GroupId, UserOrGroupId FROM GroupMember WHERE UserOrGroupId IN " +
+        "(SELECT Id FROM Group WHERE Type = 'Regular') LIMIT 1000"
+      ).catch(() => ({ records: [] }))
     ]);
     res.json({
       groups: groupsRes.records || [],
       groupMemberCounts: groupMembersRes.records || [],
       queues: queuesRes.records || [],
-      queueObjects: queueSobjectsRes.records || []
+      queueObjects: queueSobjectsRes.records || [],
+      nestedGroupMembers: nestedGroupMembersRes.records || []
     });
   } catch (err) {
     console.error('Groups & queues assessment error:', err);
@@ -442,7 +458,10 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       vadProfileUsersRes, madProfileUsersRes,
       vadPermSetUsersRes, madPermSetUsersRes,
       viewAllPermsRes, modifyAllPermsRes,
-      totalUsersRes
+      totalUsersRes,
+      psgCountRes,
+      authorApexUsersRes,
+      manageUsersUsersRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Profile.Name FROM User " +
@@ -468,7 +487,16 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       safeToolingQuery(conn,
         "SELECT Id, SobjectType FROM ObjectPermissions WHERE PermissionsModifyAllRecords = true LIMIT 500"
       ),
-      safeQuery(conn, "SELECT COUNT(Id) FROM User WHERE IsActive = true AND UserType = 'Standard'").catch(() => ({ records: [{ expr0: 0 }] }))
+      safeQuery(conn, "SELECT COUNT(Id) FROM User WHERE IsActive = true AND UserType = 'Standard'").catch(() => ({ records: [{ expr0: 0 }] })),
+      safeQuery(conn, "SELECT COUNT(Id) FROM PermissionSetGroup").catch(() => ({ records: [{ expr0: 0 }] })),
+      safeQuery(conn,
+        "SELECT AssigneeId, Assignee.Name FROM PermissionSetAssignment " +
+        "WHERE PermissionSet.PermissionsAuthorApex = true AND Assignee.IsActive = true LIMIT 500"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT AssigneeId, Assignee.Name FROM PermissionSetAssignment " +
+        "WHERE PermissionSet.PermissionsManageUsers = true AND Assignee.IsActive = true LIMIT 500"
+      ).catch(() => ({ records: [] }))
     ]);
 
     const vadUserMap = new Map();
@@ -493,12 +521,24 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       }
     }
 
+    const authorApexUserMap = new Map();
+    for (const psa of (authorApexUsersRes.records || [])) {
+      authorApexUserMap.set(psa.AssigneeId, { Id: psa.AssigneeId, Name: psa.Assignee?.Name || psa.AssigneeId });
+    }
+    const manageUsersUserMap = new Map();
+    for (const psa of (manageUsersUsersRes.records || [])) {
+      manageUsersUserMap.set(psa.AssigneeId, { Id: psa.AssigneeId, Name: psa.Assignee?.Name || psa.AssigneeId });
+    }
+
     res.json({
       viewAllDataUsers: Array.from(vadUserMap.values()),
       modifyAllDataUsers: Array.from(madUserMap.values()),
       viewAllObjectPerms: viewAllPermsRes.records || [],
       modifyAllObjectPerms: modifyAllPermsRes.records || [],
-      totalActiveUsers: (totalUsersRes.records[0] || {}).expr0 || 0
+      totalActiveUsers: (totalUsersRes.records[0] || {}).expr0 || 0,
+      permissionSetGroupCount: (psgCountRes.records[0] || {}).expr0 || 0,
+      authorApexUsers: Array.from(authorApexUserMap.values()),
+      manageUsersUsers: Array.from(manageUsersUserMap.values())
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);

@@ -18,15 +18,15 @@ Produces two outputs in a single assessment run:
 | OWD Analysis | 5 |
 | Role Hierarchy | 8 |
 | Territory Management | 5 |
-| Sharing Rules | 6 |
+| Sharing Rules | 9 |
 | Manual Sharing | 3 |
-| Apex Sharing | 5 |
+| Apex Sharing | 7 |
 | Record Teams | 3 |
-| Groups & Queues | 4 |
-| Permission Bypasses | 8 |
+| Groups & Queues | 7 |
+| Permission Bypasses | 11 |
 | Implicit Sharing | 3 |
 | External & Guest Access | 3 |
-| **Total** | **52** |
+| **Total** | **64** |
 
 ## Key Findings This Tool Surfaces
 
@@ -90,6 +90,13 @@ Opens React on `http://localhost:3000`, Express on `http://localhost:3001`.
 | `GROQ_API_KEY` | No | Alternative AI provider |
 
 ## What's New
+
+### October 2026 (64 checks)
+- Added 12 new checks from Salesforce Winter '27 Sharing & Visibility Best Practices:
+  - **Apex Sharing:** Classes with no sharing declaration (defaults to without-sharing behavior)
+  - **Sharing Rules:** Per-object proximity to 300-rule and 50 criteria-rule platform limits; restriction rules inventory
+  - **Permission Bypasses:** No Permission Set Groups defined; Author Apex / Manage Users permission holders
+  - **Groups & Queues:** Queues with DoesIncludeBosses on Private OWD objects; nested public groups
 
 ### October 2026 (52 checks)
 - Added 13 checks to complete original scope: OWD chain confusion, territory users in 50+ territories, hard-coded territory rule IDs, redundant sharing rules on Public OWD objects, Private OWD + high manual shares compensating pattern, Apex share volume per object/reason, zombie Apex sharing reasons, case teams with Private Case OWD, queues on Public OWD objects, >5% bypass threshold, permission set vs profile bypass breakdown, HVPU sharing sets
