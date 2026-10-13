@@ -214,7 +214,31 @@ app.get('/api/assess/owd', requireAuth, async (req, res) => {
       "FROM EntityDefinition WHERE IsCustomizable = true AND IsDeprecated = false " +
       "ORDER BY Label LIMIT 500"
     );
-    res.json({ entities: entityDefsRes.records || [] });
+    const standardObjs = ['Account', 'Contact', 'Case', 'Opportunity', 'Lead'];
+    const [ownershipSkewResults, recordCountResults] = await Promise.all([
+      Promise.all(standardObjs.map(obj =>
+        safeQuery(conn,
+          `SELECT OwnerId, Owner.Name, COUNT(Id) cnt FROM ${obj} ` +
+          `GROUP BY OwnerId, Owner.Name HAVING COUNT(Id) > 10000 ORDER BY COUNT(Id) DESC LIMIT 5`
+        ).then(r => ({
+          object: obj,
+          skewedOwners: (r.records || []).map(rec => ({
+            ownerName: rec.Owner?.Name || 'Unknown',
+            count: rec.cnt || rec.expr0 || 0
+          }))
+        })).catch(() => ({ object: obj, skewedOwners: [] }))
+      )),
+      Promise.all(standardObjs.map(obj =>
+        safeQuery(conn, `SELECT COUNT(Id) cnt FROM ${obj}`)
+          .then(r => ({ object: obj, count: (r.records[0] || {}).cnt || (r.records[0] || {}).expr0 || 0 }))
+          .catch(() => ({ object: obj, count: 0 }))
+      ))
+    ]);
+    res.json({
+      entities: entityDefsRes.records || [],
+      ownershipSkew: ownershipSkewResults,
+      recordCounts: recordCountResults
+    });
   } catch (err) {
     console.error('OWD assessment error:', err);
     res.status(500).json({ error: err.message });
@@ -371,12 +395,18 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       )
     );
 
+    const activeFlowsRes = await safeToolingQuery(conn,
+      "SELECT ApiName, Label, IsActive, ProcessType, RunInMode " +
+      "FROM FlowDefinitionView WHERE IsActive = true LIMIT 500"
+    ).catch(() => ({ records: [] }));
+
     res.json({
       withoutSharingClasses: withoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       sharesCreatingClasses: createsShares.map(c => ({ name: c.Name, id: c.Id })),
       noSharingDeclarationClasses: noSharingDecl.map(c => ({ name: c.Name, id: c.Id })),
       customSharingReasons: sharingReasonsRes.records || [],
-      apexShareVolumes: shareVolumeResults
+      apexShareVolumes: shareVolumeResults,
+      activeFlows: activeFlowsRes.records || []
     });
   } catch (err) {
     console.error('Apex sharing assessment error:', err);
@@ -423,7 +453,8 @@ app.get('/api/assess/record-teams', requireAuth, async (req, res) => {
 app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [groupsRes, groupMembersRes, queuesRes, queueSobjectsRes, nestedGroupMembersRes] = await Promise.all([
+    const [groupsRes, groupMembersRes, queuesRes, queueSobjectsRes, nestedGroupMembersRes,
+           broadFolderSharesRes, delegateGroupsRes] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, Type, DeveloperName FROM Group WHERE Type IN ('Regular', 'Queue') LIMIT 1000"
       ),
@@ -439,6 +470,14 @@ app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
       safeQuery(conn,
         "SELECT GroupId, UserOrGroupId FROM GroupMember WHERE UserOrGroupId IN " +
         "(SELECT Id FROM Group WHERE Type = 'Regular') LIMIT 1000"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT FolderId, Folder.Name, Folder.Type, SubjectId, SubjectType, AccessLevel " +
+        "FROM FolderShare WHERE SubjectType IN ('AllInternalUsers','RoleSubordinatesInternal') " +
+        "AND Folder.Type IN ('Report','Dashboard') LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, DeveloperName FROM DelegateGroup LIMIT 100"
       ).catch(() => ({ records: [] }))
     ]);
     res.json({
@@ -446,7 +485,9 @@ app.get('/api/assess/groups-queues', requireAuth, async (req, res) => {
       groupMemberCounts: groupMembersRes.records || [],
       queues: queuesRes.records || [],
       queueObjects: queueSobjectsRes.records || [],
-      nestedGroupMembers: nestedGroupMembersRes.records || []
+      nestedGroupMembers: nestedGroupMembersRes.records || [],
+      broadFolderShares: broadFolderSharesRes.records || [],
+      delegateGroups: delegateGroupsRes.records || []
     });
   } catch (err) {
     console.error('Groups & queues assessment error:', err);
@@ -469,14 +510,16 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       customizeAppProfileRes,
       customizeAppPermSetRes,
       expiringPsaRes,
-      uapCountRes
+      uapCountRes,
+      unassignedVadProfilesRes, unassignedMadProfilesRes,
+      unassignedVadPsRes, unassignedMadPsRes
     ] = await Promise.all([
       safeQuery(conn,
-        "SELECT Id, Name, Profile.Name FROM User " +
+        "SELECT Id, Name, UserType, LastLoginDate, Profile.Name FROM User " +
         "WHERE IsActive = true AND Profile.PermissionsViewAllData = true LIMIT 500"
       ),
       safeQuery(conn,
-        "SELECT Id, Name, Profile.Name FROM User " +
+        "SELECT Id, Name, UserType, LastLoginDate, Profile.Name FROM User " +
         "WHERE IsActive = true AND Profile.PermissionsModifyAllData = true LIMIT 500"
       ),
       safeQuery(conn,
@@ -515,7 +558,29 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
         "AND PermissionSet.IsOwnedByProfile = false LIMIT 500"
       ).catch(() => ({ records: [] })),
       safeQuery(conn, "SELECT COUNT(Id) FROM PermissionSetAssignment WHERE ExpirationDate != null").catch(() => ({ records: [{ expr0: 0 }] })),
-      safeQuery(conn, "SELECT COUNT(Id) FROM UserAccessPolicy").catch(() => ({ records: [{ expr0: 0 }] }))
+      safeQuery(conn, "SELECT COUNT(Id) FROM UserAccessPolicy").catch(() => ({ records: [{ expr0: 0 }] })),
+      safeQuery(conn,
+        "SELECT Id, Name FROM Profile WHERE PermissionsViewAllData = true " +
+        "AND UserType = 'Standard' AND Id NOT IN " +
+        "(SELECT ProfileId FROM User WHERE IsActive = true) LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name FROM Profile WHERE PermissionsModifyAllData = true " +
+        "AND UserType = 'Standard' AND Id NOT IN " +
+        "(SELECT ProfileId FROM User WHERE IsActive = true) LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name FROM PermissionSet WHERE PermissionsViewAllData = true " +
+        "AND IsOwnedByProfile = false AND NamespacePrefix = null " +
+        "AND Id NOT IN (SELECT PermissionSetId FROM PermissionSetAssignment " +
+        "WHERE Assignee.IsActive = true) LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name FROM PermissionSet WHERE PermissionsModifyAllData = true " +
+        "AND IsOwnedByProfile = false AND NamespacePrefix = null " +
+        "AND Id NOT IN (SELECT PermissionSetId FROM PermissionSetAssignment " +
+        "WHERE Assignee.IsActive = true) LIMIT 100"
+      ).catch(() => ({ records: [] }))
     ]);
 
     const vadUserMap = new Map();
@@ -571,7 +636,11 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       manageUsersUsers: Array.from(manageUsersUserMap.values()),
       customizeAppUsers: Array.from(customizeAppMap.values()),
       expiringPsaCount: (expiringPsaRes.records[0] || {}).expr0 || 0,
-      userAccessPolicyCount: (uapCountRes.records[0] || {}).expr0 || 0
+      userAccessPolicyCount: (uapCountRes.records[0] || {}).expr0 || 0,
+      unassignedVadProfiles: unassignedVadProfilesRes.records || [],
+      unassignedMadProfiles: unassignedMadProfilesRes.records || [],
+      unassignedVadPermSets: unassignedVadPsRes.records || [],
+      unassignedMadPermSets: unassignedMadPsRes.records || []
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);
@@ -600,7 +669,8 @@ app.get('/api/assess/implicit-sharing', requireAuth, async (req, res) => {
 app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes] = await Promise.all([
+    const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes,
+           portalUserCountsRes, portalUsersWithBypassRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -610,13 +680,25 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       safeToolingQuery(conn, "SELECT Id, Name FROM SharingSet LIMIT 100").catch(() => ({ records: [] })),
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM CriteriaBasedSharingRule WHERE SharedToType = 'GuestUser' LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT UserType, COUNT(Id) cnt FROM User WHERE IsActive = true " +
+        "AND UserType IN ('PowerPartner','PowerCustomerSuccess','CspLitePortal','CustomerSuccess','SelfService') " +
+        "GROUP BY UserType LIMIT 20"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, UserType, Profile.Name FROM User WHERE IsActive = true " +
+        "AND UserType IN ('PowerPartner','PowerCustomerSuccess','CspLitePortal') " +
+        "AND (Profile.PermissionsViewAllData = true OR Profile.PermissionsModifyAllData = true) LIMIT 200"
       ).catch(() => ({ records: [] }))
     ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
       externalEntities: externalEntitiesRes.records || [],
       sharingSets: sharingSetRes.records || [],
-      guestSharingRules: guestSharingRulesRes.records || []
+      guestSharingRules: guestSharingRulesRes.records || [],
+      portalUserCounts: portalUserCountsRes.records || [],
+      portalUsersWithBypass: portalUsersWithBypassRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);

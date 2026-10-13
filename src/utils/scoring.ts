@@ -98,6 +98,63 @@ export function assessOwd(data: { entities: any[] }): CategoryResult & { invento
     ));
   }
 
+  // ── Ownership Skew ──────────────────────────────────────────────────────────
+  const ownershipSkew: any[] = (data as any).ownershipSkew || [];
+  const skewedWithNonPrivateOwd = ownershipSkew.filter(obj => {
+    const owd = owdByName.get(obj.object);
+    return obj.skewedOwners.length > 0 && owd && owd !== 'Private' && owd !== 'ControlledByParent';
+  });
+  if (skewedWithNonPrivateOwd.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `Ownership Skew on ${skewedWithNonPrivateOwd.length} Non-Private Object${skewedWithNonPrivateOwd.length > 1 ? 's' : ''} — Sharing Recalculation Risk`,
+      'A single user owns over 10,000 records on an object with non-Private OWD. Ownership skew causes extremely long sharing recalculations when the skewed owner changes roles, is deactivated, or records are mass-transferred.',
+      'Redistribute record ownership across queues or business unit users. Avoid mass-parking records on a single user. Any ownership transfer or role change for the skewed owner must be planned with recalculation impact analysis.',
+      { records: skewedWithNonPrivateOwd.flatMap(obj => obj.skewedOwners.map((o: any) => ({ name: obj.object, detail: `${o.ownerName}: ${o.count.toLocaleString()} records, OWD: ${owdByName.get(obj.object)}` }))) }
+    ));
+  }
+
+  const skewedPrivateOnly = ownershipSkew.filter(obj => {
+    const owd = owdByName.get(obj.object);
+    return obj.skewedOwners.length > 0 && (owd === 'Private' || owd === 'ControlledByParent') &&
+      !skewedWithNonPrivateOwd.find(s => s.object === obj.object);
+  });
+  if (skewedPrivateOnly.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `Ownership Skew on ${skewedPrivateOnly.length} Private OWD Object${skewedPrivateOnly.length > 1 ? 's' : ''} — Lock and Recalculation Risk`,
+      'Ownership skew on Private OWD objects can cause UNABLE TO LOCK ROW errors on the skewed owner\'s records, slow sharing recalculations on ownership changes, and serialized integration processing.',
+      'Confirm whether concentrated ownership is intentional (integration or archival owner). If records should be distributed, plan a phased reassignment with locking and recalculation impact analysis.',
+      { records: skewedPrivateOnly.flatMap(obj => obj.skewedOwners.map((o: any) => ({ name: obj.object, detail: `${o.ownerName}: ${o.count.toLocaleString()} records` }))) }
+    ));
+  }
+
+  // ── LDV + Non-Private OWD ───────────────────────────────────────────────────
+  const recordCounts: any[] = (data as any).recordCounts || [];
+  const ldvNonPrivate = recordCounts.filter(r => {
+    const owd = owdByName.get(r.object);
+    return r.count > 1000000 && owd && owd !== 'Private' && owd !== 'ControlledByParent';
+  });
+  if (ldvNonPrivate.length > 0) {
+    findings.push(createFinding(CAT, 'critical',
+      `${ldvNonPrivate.length} High-Volume Object${ldvNonPrivate.length > 1 ? 's Have' : ' Has'} Non-Private OWD — Severe Sharing Recalculation Risk`,
+      'Objects with over 1 million records and a non-Private OWD trigger very long sharing recalculations on any role hierarchy change, sharing rule edit, or mass ownership transfer. These recalculations can block or slow the entire org for hours.',
+      'Evaluate moving these objects to Private OWD with targeted sharing rules. Any sharing model change on high-volume objects must be planned with full recalculation time estimates and tested in a full-size sandbox.',
+      { records: ldvNonPrivate.map(r => ({ name: r.object, detail: `${r.count.toLocaleString()} records, OWD: ${owdByName.get(r.object)}` })) }
+    ));
+  }
+
+  const ldvPrivate = recordCounts.filter(r => {
+    const owd = owdByName.get(r.object);
+    return r.count > 1000000 && (owd === 'Private' || owd === 'ControlledByParent');
+  });
+  if (ldvPrivate.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${ldvPrivate.length} High-Volume Object${ldvPrivate.length > 1 ? 's' : ''} with Private OWD — Monitor Recalculation Performance`,
+      'Large data volume objects with Private OWD still trigger sharing recalculation on ownership changes. At this scale, even planned operations like mass transfers or role changes can create hours-long async sharing queues.',
+      'Establish baseline recalculation times. Plan any sharing model changes with full-size sandbox testing. Monitor ownership distribution to prevent skew.',
+      { records: ldvPrivate.map(r => ({ name: r.object, detail: `${r.count.toLocaleString()} records, OWD: ${owdByName.get(r.object)}` })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -608,6 +665,31 @@ export function assessApexSharing(data: {
     }
   }
 
+  // ── Flows in system context ─────────────────────────────────────────────────
+  const activeFlows: any[] = (data as any).activeFlows || [];
+  const systemContextFlows = activeFlows.filter((f: any) => f.RunInMode === 'SystemModeWithoutSharing');
+  if (systemContextFlows.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${systemContextFlows.length} Active Flow${systemContextFlows.length > 1 ? 's Run' : ' Runs'} in System Context Without Sharing`,
+      "Flows configured to run in 'System context without sharing' bypass all record-level security including OWD, sharing rules, and role hierarchy — the Flow equivalent of Apex 'without sharing'. Each such flow is a potential data exposure or unauthorised-write vector.",
+      "Review each flow. Switch to 'System context with sharing' or 'User or system context' unless the bypass is explicitly required and documented. Maintain a flow sharing-exception register.",
+      { records: systemContextFlows.map((f: any) => ({ name: f.Label || f.ApiName, detail: `${f.ProcessType || 'Flow'} — System context without sharing` })) }
+    ));
+  }
+
+  const autolaunchedNoMode = activeFlows.filter((f: any) =>
+    f.ProcessType === 'AutoLaunchedFlow' &&
+    (!f.RunInMode || f.RunInMode === 'DefaultMode')
+  );
+  if (autolaunchedNoMode.length > 20) {
+    findings.push(createFinding(CAT, 'medium',
+      `${autolaunchedNoMode.length} Autolaunched Flows Have No Explicit Sharing Context`,
+      'Autolaunched flows without an explicit running context may run in system context depending on how they are invoked (from Apex, schedules, or platform events), potentially bypassing sharing rules silently.',
+      "Set an explicit running context on all autolaunched flows. Use 'User or system context' (with sharing) wherever possible to respect record-level security.",
+      { count: autolaunchedNoMode.length }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -799,6 +881,35 @@ export function assessGroupsQueues(data: {
   }
 
   const publicGroups = groups.filter(g => g.Type === 'Regular');
+  // ── Report & Dashboard folder visibility ────────────────────────────────────
+  const broadFolderShares: any[] = (data as any).broadFolderShares || [];
+  if (broadFolderShares.length > 0) {
+    const byFolder = new Map<string, { name: string; type: string }>();
+    for (const fs of broadFolderShares) {
+      const key = fs.FolderId || 'unknown';
+      if (!byFolder.has(key)) {
+        byFolder.set(key, { name: fs.Folder?.Name || 'Unknown', type: fs.Folder?.Type || 'Unknown' });
+      }
+    }
+    findings.push(createFinding(CAT, 'high',
+      `${byFolder.size} Report/Dashboard Folder${byFolder.size > 1 ? 's Are' : ' Is'} Shared with All Internal Users`,
+      'Report and dashboard folders shared with All Internal Users expose their contents to every user in the org. If these folders contain reports on sensitive objects (finance, HR, clinical), any user can access that data regardless of their record-level sharing permissions.',
+      'Review each broadly shared folder. Restrict sharing to specific roles, groups, or users. Never share folders containing sensitive reports with All Internal Users unless the data is genuinely non-sensitive.',
+      { records: Array.from(byFolder.values()).map(f => ({ name: f.name, detail: `${f.type} folder — shared with all users` })) }
+    ));
+  }
+
+  // ── Delegated Administration ────────────────────────────────────────────────
+  const delegateGroups: any[] = (data as any).delegateGroups || [];
+  if (delegateGroups.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${delegateGroups.length} Delegated Administration Group${delegateGroups.length > 1 ? 's Are' : ' Is'} Configured`,
+      'Delegated administration groups grant non-administrator users the ability to manage other users in specific roles or profiles, including resetting passwords and modifying permission assignments. A delegated admin can effectively escalate access by changing permissions for the users they manage.',
+      'Review all delegated admin groups. Confirm each delegated admin is a current, trusted employee with a documented need. Audit which profiles and roles each group is authorised to manage and review on a quarterly basis.',
+      { records: delegateGroups.map((g: any) => ({ name: g.Name, detail: `DeveloperName: ${g.DeveloperName || 'N/A'}` })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -986,6 +1097,57 @@ export function assessPermissionBypasses(data: {
     ));
   }
 
+  // ── Non-human / stale users with elevated access ────────────────────────────
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const elevatedUserMap = new Map<string, any>();
+  for (const u of vadUsers) elevatedUserMap.set(u.Id, u);
+  for (const u of madUsers) if (!elevatedUserMap.has(u.Id)) elevatedUserMap.set(u.Id, u);
+  const allElevatedUsers = Array.from(elevatedUserMap.values());
+
+  const neverLoggedIn = allElevatedUsers.filter((u: any) => !u.LastLoginDate);
+  if (neverLoggedIn.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${neverLoggedIn.length} User${neverLoggedIn.length > 1 ? 's With' : ' With'} Elevated Access Have Never Logged In`,
+      'Active users with View All Data or Modify All Data who have never logged in are likely integration, API-only, or orphaned accounts. These represent a standing privileged access risk with no verified active business purpose.',
+      'Investigate each account. Confirm it has a current owner and documented purpose. If it is an integration user, verify it uses certificate-based or named credential authentication. Remove elevated permissions from any account without a verified purpose.',
+      { records: neverLoggedIn.map((u: any) => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} — Never logged in` })) }
+    ));
+  }
+
+  const staleElevated = allElevatedUsers.filter((u: any) => {
+    if (!u.LastLoginDate) return false;
+    return new Date(u.LastLoginDate) < ninetyDaysAgo;
+  });
+  if (staleElevated.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${staleElevated.length} User${staleElevated.length > 1 ? 's With' : ' With'} Elevated Access Have Not Logged In for 90+ Days`,
+      'Users with View All Data or Modify All Data who have not logged in recently may be former employees, dormant accounts, or seasonal users whose elevated access was not revoked.',
+      'Review each account. Deactivate former-employee accounts immediately. For seasonal users, replace standing elevated access with time-limited permission set assignments using an expiration date.',
+      { records: staleElevated.map((u: any) => ({ name: u.Name, detail: `${u.Profile?.Name || 'Unknown'} — Last login: ${new Date(u.LastLoginDate).toLocaleDateString()}` })) }
+    ));
+  }
+
+  // ── Unassigned profiles/PSes with elevated access ───────────────────────────
+  const unassignedVadProfiles: any[] = (data as any).unassignedVadProfiles || [];
+  const unassignedMadProfiles: any[] = (data as any).unassignedMadProfiles || [];
+  const unassignedVadPs: any[] = (data as any).unassignedVadPermSets || [];
+  const unassignedMadPs: any[] = (data as any).unassignedMadPermSets || [];
+  const allUnassignedElevated = [
+    ...unassignedVadProfiles.map((p: any) => ({ name: p.Name, detail: 'Profile: View All Data, no active users' })),
+    ...unassignedMadProfiles.map((p: any) => ({ name: p.Name, detail: 'Profile: Modify All Data, no active users' })),
+    ...unassignedVadPs.map((p: any) => ({ name: p.Name, detail: 'Permission Set: View All Data, no active assignments' })),
+    ...unassignedMadPs.map((p: any) => ({ name: p.Name, detail: 'Permission Set: Modify All Data, no active assignments' }))
+  ];
+  if (allUnassignedElevated.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${allUnassignedElevated.length} Unassigned Profile${allUnassignedElevated.length > 1 ? 's/Permission Sets Grant' : '/Permission Set Grants'} Org-Wide Data Access`,
+      'Profiles and permission sets with View All Data or Modify All Data that have no active user assignments represent a latent access risk — if accidentally assigned during onboarding or profile cloning, they immediately grant full data visibility.',
+      'Remove org-wide data access permissions from unassigned profiles and permission sets, or delete them if no longer required. A profile that is not assigned to anyone should not carry the highest-risk permissions.',
+      { records: allUnassignedElevated }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -1104,6 +1266,28 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Guest user sharing rules grant record access to unauthenticated internet users. Each rule represents a deliberate decision to expose records to the public internet. These rules require the highest level of scrutiny — the criteria must be narrow, the access level appropriate, and the business justification explicit and formally approved.',
       'Review every guest user sharing rule. Confirm the criteria explicitly select only records intended for public access. Confirm no sensitive fields are exposed via the shared records. Document the business justification and review cadence for each rule.',
       { records: Array.from(byObject.entries()).map(([obj, count]) => ({ name: obj, detail: `${count} guest user sharing rule${count > 1 ? 's' : ''}` })) }
+    ));
+  }
+
+  // ── Experience Cloud authenticated users ────────────────────────────────────
+  const portalUsersWithBypass: any[] = (data as any).portalUsersWithBypass || [];
+  if (portalUsersWithBypass.length > 0) {
+    findings.push(createFinding(CAT, 'critical',
+      `${portalUsersWithBypass.length} Experience Cloud User${portalUsersWithBypass.length > 1 ? 's Have' : ' Has'} Org-Wide Data Access Permissions`,
+      'Active Experience Cloud users (Partner or Customer Community) with View All Data or Modify All Data can access every record in the org. External users with these permissions represent a critical data breach risk.',
+      'Immediately revoke View All Data and Modify All Data from all Experience Cloud user profiles and permission sets. External users should never hold org-wide bypass permissions.',
+      { records: portalUsersWithBypass.map((u: any) => ({ name: u.Name, detail: `${u.UserType} — ${u.Profile?.Name || 'Unknown profile'}` })) }
+    ));
+  }
+
+  const portalUserCounts: any[] = (data as any).portalUserCounts || [];
+  const totalPortalUsers = portalUserCounts.reduce((sum: number, r: any) => sum + (r.cnt || r.expr0 || 0), 0);
+  if (totalPortalUsers > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${totalPortalUsers.toLocaleString()} Active Experience Cloud Authenticated User${totalPortalUsers > 1 ? 's' : ''} — Review Sharing Model Coverage`,
+      'Authenticated Experience Cloud users (Partner Community, Customer Community) access records via Sharing Sets, sharing rules, or standard sharing. As user counts grow, the sharing model must be intentional and not over-expose records through non-Private external OWD.',
+      'Audit the sharing access for each Experience Cloud user license type. Confirm Sharing Sets are correctly scoped. Verify no object has a non-Private external OWD that inadvertently exposes records to all portal users.',
+      { records: portalUserCounts.filter((r: any) => (r.cnt || r.expr0 || 0) > 0).map((r: any) => ({ name: r.UserType, detail: `${(r.cnt || r.expr0 || 0).toLocaleString()} active users` })) }
     ));
   }
 
