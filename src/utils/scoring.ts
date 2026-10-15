@@ -589,6 +589,14 @@ export function assessApexSharing(data: {
   sharesCreatingClasses: { name: string; id: string }[];
   customSharingReasons: any[];
   apexShareVolumes?: { object: string; reasons: { reason: string; count: number }[] }[];
+  noSharingDeclarationClasses?: { name: string; id: string }[];
+  auraEnabledWithoutSharingClasses?: { name: string; id: string }[];
+  invocableWithoutSharingClasses?: { name: string; id: string }[];
+  invocableNoDeclarationClasses?: { name: string; id: string }[];
+  batchWithoutSharingClasses?: { name: string; id: string }[];
+  schedulableWithoutSharingClasses?: { name: string; id: string }[];
+  inheritedSharingClasses?: { name: string; id: string }[];
+  apexTriggers?: { name: string; id: string }[];
 }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Apex Sharing';
@@ -665,28 +673,72 @@ export function assessApexSharing(data: {
     }
   }
 
-  // ── Flows in system context ─────────────────────────────────────────────────
-  const activeFlows: any[] = (data as any).activeFlows || [];
-  const systemContextFlows = activeFlows.filter((f: any) => f.RunInMode === 'SystemModeWithoutSharing');
-  if (systemContextFlows.length > 0) {
-    findings.push(createFinding(CAT, 'high',
-      `${systemContextFlows.length} Active Flow${systemContextFlows.length > 1 ? 's Run' : ' Runs'} in System Context Without Sharing`,
-      "Flows configured to run in 'System context without sharing' bypass all record-level security including OWD, sharing rules, and role hierarchy — the Flow equivalent of Apex 'without sharing'. Each such flow is a potential data exposure or unauthorised-write vector.",
-      "Review each flow. Switch to 'System context with sharing' or 'User or system context' unless the bypass is explicitly required and documented. Maintain a flow sharing-exception register.",
-      { records: systemContextFlows.map((f: any) => ({ name: f.Label || f.ApiName, detail: `${f.ProcessType || 'Flow'} — System context without sharing` })) }
+  // @AuraEnabled in without-sharing classes
+  const auraClasses = data.auraEnabledWithoutSharingClasses || [];
+  if (auraClasses.length > 0) {
+    findings.push(createFinding(CAT, auraClasses.length > 5 ? 'high' : 'medium',
+      `${auraClasses.length} Apex Class${auraClasses.length > 1 ? 'es Have' : ' Has'} @AuraEnabled Methods Running Without Sharing`,
+      '@AuraEnabled methods are callable from LWC and Aura components directly from the UI. Classes marked without sharing expose those endpoints to bypass record-level security — any authenticated user invoking the controller gets unrestricted data access.',
+      "Add 'with sharing' to each class. If system context is required for specific methods, move those methods to a separate inner class or service class with an explicit sharing declaration and a documented exception.",
+      { records: auraClasses.map(c => ({ name: c.name, detail: '@AuraEnabled + without sharing' })) }
     ));
   }
 
-  const autolaunchedNoMode = activeFlows.filter((f: any) =>
-    f.ProcessType === 'AutoLaunchedFlow' &&
-    (!f.RunInMode || f.RunInMode === 'DefaultMode')
-  );
-  if (autolaunchedNoMode.length > 20) {
+  // @InvocableMethod in without-sharing or no-declaration classes
+  const invocableRisk = [
+    ...(data.invocableWithoutSharingClasses || []).map(c => ({ ...c, detail: 'without sharing' })),
+    ...(data.invocableNoDeclarationClasses || []).map(c => ({ ...c, detail: 'no sharing declaration' }))
+  ];
+  if (invocableRisk.length > 0) {
+    findings.push(createFinding(CAT, invocableRisk.length > 3 ? 'high' : 'medium',
+      `${invocableRisk.length} @InvocableMethod Class${invocableRisk.length > 1 ? 'es' : ''} Without Sharing Enforcement — Callable From Flows`,
+      "Apex classes with @InvocableMethod that run without sharing (or have no sharing declaration) grant any flow that calls them system-level data access, regardless of the flow's own run mode setting. This creates a cross-layer sharing bypass.",
+      "Add 'with sharing' to each @InvocableMethod class. If the method requires elevated access, declare 'without sharing' explicitly and document the exception register entry.",
+      { records: invocableRisk.slice(0, 50).map(c => ({ name: c.name, detail: c.detail })) }
+    ));
+  }
+
+  // Batch Apex without sharing
+  const batchClasses = data.batchWithoutSharingClasses || [];
+  if (batchClasses.length > 0) {
     findings.push(createFinding(CAT, 'medium',
-      `${autolaunchedNoMode.length} Autolaunched Flows Have No Explicit Sharing Context`,
-      'Autolaunched flows without an explicit running context may run in system context depending on how they are invoked (from Apex, schedules, or platform events), potentially bypassing sharing rules silently.',
-      "Set an explicit running context on all autolaunched flows. Use 'User or system context' (with sharing) wherever possible to respect record-level security.",
-      { count: autolaunchedNoMode.length }
+      `${batchClasses.length} Batch Apex Class${batchClasses.length > 1 ? 'es' : ''} Without Sharing Enforcement`,
+      'Batch Apex classes running without sharing process large record volumes without any record-level security enforcement. While system context is sometimes intentional for batch processes, each class should be explicitly reviewed and justified.',
+      "Verify each batch class requires system context. Add 'with sharing' where the batch should only process records accessible to the running user. Document exceptions in the sharing exception register.",
+      { records: batchClasses.map(c => ({ name: c.name, detail: 'Database.Batchable — without sharing or no declaration' })) }
+    ));
+  }
+
+  // Schedulable without sharing
+  const schedulableClasses = data.schedulableWithoutSharingClasses || [];
+  if (schedulableClasses.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${schedulableClasses.length} Scheduled Apex Class${schedulableClasses.length > 1 ? 'es' : ''} Without Sharing Enforcement`,
+      'Scheduled Apex runs on a time-based schedule without a user session. Classes without sharing enforcement access all records regardless of ownership or sharing rules, with no running-user context to constrain scope.',
+      "Add 'with sharing' or 'inherited sharing' unless the scheduled job has a documented requirement for unrestricted record access. Ensure the record scope each job processes is as narrow as possible.",
+      { records: schedulableClasses.map(c => ({ name: c.name, detail: 'Schedulable — without sharing or no declaration' })) }
+    ));
+  }
+
+  // Inherited sharing inventory
+  const inheritedClasses = data.inheritedSharingClasses || [];
+  if (inheritedClasses.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${inheritedClasses.length} Apex Class${inheritedClasses.length > 1 ? 'es Use' : ' Uses'} Inherited Sharing — Context Depends on Caller`,
+      "Classes declared with 'inherited sharing' take on the sharing context of their caller. When invoked from a 'without sharing' class or a system context (batch, triggers, flows), they effectively run without sharing enforcement.",
+      "Audit each inherited sharing class to understand all call paths. Where a class may be called from system context, consider whether 'with sharing' would be safer. Document call-path dependencies.",
+      { count: inheritedClasses.length, records: inheritedClasses.slice(0, 30).map(c => ({ name: c.name, detail: 'inherited sharing — context depends on caller' })) }
+    ));
+  }
+
+  // Apex Triggers (informational)
+  const triggers = data.apexTriggers || [];
+  if (triggers.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${triggers.length} Active Custom Apex Trigger${triggers.length > 1 ? 's' : ''} — Always System Context`,
+      'Apex triggers cannot declare a sharing mode and always run in system context. Any SOQL or DML in a trigger bypasses record-level security. This is an inventory finding — review each trigger for scope appropriateness.',
+      "Review each trigger's SOQL queries and DML. Ensure triggers do not expose records to side effects that bypass the intended sharing model. Consider whether trigger logic should delegate to a with-sharing service class.",
+      { count: triggers.length, records: triggers.slice(0, 30).map(t => ({ name: t.name, detail: 'Apex Trigger — always system context' })) }
     ));
   }
 
@@ -696,8 +748,103 @@ export function assessApexSharing(data: {
     items: findings,
     stats: {
       withoutSharingCount: withoutSharing.length,
-      customReasonCount: customReasons.length
+      customReasonCount: customReasons.length,
+      inheritedSharingCount: (data.inheritedSharingClasses || []).length,
+      triggerCount: (data.apexTriggers || []).length
     }
+  };
+}
+
+// ── Flow & Automation Sharing ─────────────────────────────────────────────────
+export function assessFlowSharing(data: {
+  flows: { ApiName: string; Label: string; ProcessType: string; RunInMode: string }[];
+}, apexData?: {
+  invocableWithoutSharingClasses?: { name: string; id: string }[];
+  invocableNoDeclarationClasses?: { name: string; id: string }[];
+}): CategoryResult {
+  const findings: SharingFinding[] = [];
+  const CAT = 'Flow & Automation Sharing';
+  const flows = data.flows || [];
+
+  // Screen flows explicitly set to SystemModeWithoutSharing
+  const screenWithoutSharing = flows.filter(f =>
+    f.ProcessType === 'Flow' && f.RunInMode === 'SystemModeWithoutSharing'
+  );
+  if (screenWithoutSharing.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${screenWithoutSharing.length} Screen Flow${screenWithoutSharing.length > 1 ? 's' : ''} Set to System Context Without Sharing`,
+      'Screen flows run in user context by default. Explicitly setting SystemModeWithoutSharing means the flow bypasses record-level security for all users who run it — almost always unintentional and a significant exposure risk.',
+      "Change each screen flow to 'User or system context' or 'System context with sharing'. Remove SystemModeWithoutSharing unless there is a specific, documented requirement and the exposure has been risk-accepted.",
+      { records: screenWithoutSharing.map(f => ({ name: f.Label || f.ApiName, detail: 'Screen Flow — System context without sharing' })) }
+    ));
+  }
+
+  // Record-triggered flows explicitly set to SystemModeWithoutSharing
+  const recordTriggeredWithoutSharing = flows.filter(f =>
+    f.ProcessType === 'RecordTriggeredFlow' && f.RunInMode === 'SystemModeWithoutSharing'
+  );
+  if (recordTriggeredWithoutSharing.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${recordTriggeredWithoutSharing.length} Record-Triggered Flow${recordTriggeredWithoutSharing.length > 1 ? 's' : ''} Set to System Context Without Sharing`,
+      "Record-triggered flows default to 'System context with sharing' since Spring '22. Explicitly overriding to SystemModeWithoutSharing removes that protection, allowing the flow to read and write records the triggering user cannot access.",
+      "Remove SystemModeWithoutSharing from each record-triggered flow. Use the default 'System context with sharing' unless a specific requirement mandates the override — document the exception.",
+      { records: recordTriggeredWithoutSharing.map(f => ({ name: f.Label || f.ApiName, detail: 'Record-Triggered Flow — System context without sharing' })) }
+    ));
+  }
+
+  // Autolaunched flows in system context (explicit or default)
+  const autolaunchedSystem = flows.filter(f =>
+    f.ProcessType === 'AutoLaunchedFlow' &&
+    (f.RunInMode === 'SystemModeWithoutSharing' || !f.RunInMode || f.RunInMode === 'DefaultMode')
+  );
+  if (autolaunchedSystem.length > 0) {
+    findings.push(createFinding(CAT, autolaunchedSystem.length > 20 ? 'high' : 'medium',
+      `${autolaunchedSystem.length} Autolaunched Flow${autolaunchedSystem.length > 1 ? 's' : ''} Run in System Context Without Sharing`,
+      'Autolaunched flows run in system context without sharing by default — bypassing OWD, sharing rules, and role hierarchy. This is the platform default for this flow type; each flow should be evaluated for whether system context is actually required.',
+      "For each autolaunched flow, evaluate whether 'System context with sharing' is viable. Flows called from Apex can inherit the calling class's sharing context. Restrict system context to flows that genuinely require unrestricted record access.",
+      { count: autolaunchedSystem.length, records: autolaunchedSystem.slice(0, 30).map(f => ({ name: f.Label || f.ApiName, detail: `AutoLaunched — ${f.RunInMode || 'DefaultMode (system context)'}` })) }
+    ));
+  }
+
+  // Scheduled flows
+  const scheduledFlows = flows.filter(f => f.ProcessType === 'ScheduledFlow');
+  if (scheduledFlows.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${scheduledFlows.length} Active Scheduled Flow${scheduledFlows.length > 1 ? 's' : ''} — Always System Context`,
+      'Scheduled flows always run in system context because they execute without a user session. They have unrestricted record access. Verify each scheduled flow accesses and modifies only the records it is intended to process.',
+      'Review each scheduled flow for data scope. Add filter criteria to limit the record set each run processes. Ensure the flow does not perform DML on records outside its intended scope.',
+      { records: scheduledFlows.map(f => ({ name: f.Label || f.ApiName, detail: 'Scheduled Flow — always system context' })) }
+    ));
+  }
+
+  // Platform Event-triggered flows
+  const platformEventFlows = flows.filter(f => f.ProcessType === 'PlatformEventTriggeredFlow');
+  if (platformEventFlows.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${platformEventFlows.length} Platform Event-Triggered Flow${platformEventFlows.length > 1 ? 's' : ''} — Always System Context`,
+      'Platform event-triggered flows run in system context because platform events are published asynchronously without a user session. These flows have unrestricted record access and bypass sharing.',
+      'Review each platform event-triggered flow. Ensure data operations are tightly scoped and do not expose or modify records beyond the intended use case. Consider whether the triggering event could carry sufficient context to restrict scope.',
+      { records: platformEventFlows.map(f => ({ name: f.Label || f.ApiName, detail: 'Platform Event Flow — always system context' })) }
+    ));
+  }
+
+  // Flows with DefaultMode — inventory across all types
+  const defaultModeFlows = flows.filter(f => !f.RunInMode || f.RunInMode === 'DefaultMode');
+  if (defaultModeFlows.length > 0) {
+    const byType: Record<string, number> = {};
+    defaultModeFlows.forEach(f => { byType[f.ProcessType || 'Unknown'] = (byType[f.ProcessType || 'Unknown'] || 0) + 1; });
+    findings.push(createFinding(CAT, 'low',
+      `${defaultModeFlows.length} Active Flow${defaultModeFlows.length > 1 ? 's' : ''} Rely on Platform Default Run Mode`,
+      'Flows with no explicit RunInMode depend on Salesforce platform defaults, which vary by flow type and can change across releases. Explicit declarations make sharing behavior auditable and resistant to default-behavior changes.',
+      'Set an explicit RunInMode on every active flow. This ensures sharing behavior is declared in metadata, visible in audit, and unaffected by future platform default changes.',
+      { count: defaultModeFlows.length, records: Object.entries(byType).map(([type, count]) => ({ name: type, detail: `${count} flow${count > 1 ? 's' : ''} using platform default run mode` })) }
+    ));
+  }
+
+  return {
+    category: CAT,
+    score: calculateCategoryScore(findings),
+    items: findings
   };
 }
 

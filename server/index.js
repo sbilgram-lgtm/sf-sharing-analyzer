@@ -362,13 +362,16 @@ app.get('/api/assess/manual-sharing', requireAuth, async (req, res) => {
 app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [apexClassesRes, sharingReasonsRes] = await Promise.all([
+    const [apexClassesRes, sharingReasonsRes, triggersRes] = await Promise.all([
       safeToolingQuery(conn,
         "SELECT Id, Name, Body FROM ApexClass " +
         "WHERE NamespacePrefix = null AND Status = 'Active' LIMIT 2000"
       ),
       safeToolingQuery(conn,
         "SELECT DeveloperName, Label FROM SharingReason LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, Name FROM ApexTrigger WHERE Status = 'Active' AND NamespacePrefix = null LIMIT 500"
       ).catch(() => ({ records: [] }))
     ]);
 
@@ -385,6 +388,25 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       return !hasSharing && !isTest;
     });
 
+    const inheritedSharingClasses = classes.filter(c => /\binherited\s+sharing\b/i.test(c.Body || ''));
+    const auraEnabledWithoutSharing = withoutSharing.filter(c => /@AuraEnabled\b/i.test(c.Body || ''));
+    const allInvocable = classes.filter(c => /@InvocableMethod\b/i.test(c.Body || ''));
+    const invocableWithoutSharing = allInvocable.filter(c => /\bwithout\s+sharing\b/i.test(c.Body || ''));
+    const invocableNoDeclaration = allInvocable.filter(c => {
+      const body = c.Body || '';
+      return !/@IsTest\b/i.test(body) && !/\bwith\s+sharing\b|\bwithout\s+sharing\b|\binherited\s+sharing\b/i.test(body);
+    });
+    const batchAll = classes.filter(c => /implements\s+[\w\s,]*Database\.Batchable/i.test(c.Body || ''));
+    const batchWithoutSharing = batchAll.filter(c => {
+      const body = c.Body || '';
+      return /\bwithout\s+sharing\b/i.test(body) || (!/\bwith\s+sharing\b|\bwithout\s+sharing\b|\binherited\s+sharing\b/i.test(body) && !/@IsTest\b/i.test(body));
+    });
+    const schedulableAll = classes.filter(c => /implements\s+[\w\s,]*Schedulable\b/i.test(c.Body || ''));
+    const schedulableWithoutSharing = schedulableAll.filter(c => {
+      const body = c.Body || '';
+      return /\bwithout\s+sharing\b/i.test(body) || (!/\bwith\s+sharing\b|\bwithout\s+sharing\b|\binherited\s+sharing\b/i.test(body) && !/@IsTest\b/i.test(body));
+    });
+
     const standardObjects = ['Account', 'Case', 'Opportunity', 'Contact', 'Lead', 'Campaign'];
     const shareVolumeResults = await Promise.all(
       standardObjects.map(obj =>
@@ -395,18 +417,19 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       )
     );
 
-    const activeFlowsRes = await safeToolingQuery(conn,
-      "SELECT ApiName, Label, IsActive, ProcessType, RunInMode " +
-      "FROM FlowDefinitionView WHERE IsActive = true LIMIT 500"
-    ).catch(() => ({ records: [] }));
-
     res.json({
       withoutSharingClasses: withoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       sharesCreatingClasses: createsShares.map(c => ({ name: c.Name, id: c.Id })),
       noSharingDeclarationClasses: noSharingDecl.map(c => ({ name: c.Name, id: c.Id })),
       customSharingReasons: sharingReasonsRes.records || [],
       apexShareVolumes: shareVolumeResults,
-      activeFlows: activeFlowsRes.records || []
+      inheritedSharingClasses: inheritedSharingClasses.map(c => ({ name: c.Name, id: c.Id })),
+      auraEnabledWithoutSharingClasses: auraEnabledWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      invocableWithoutSharingClasses: invocableWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      invocableNoDeclarationClasses: invocableNoDeclaration.map(c => ({ name: c.Name, id: c.Id })),
+      batchWithoutSharingClasses: batchWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      schedulableWithoutSharingClasses: schedulableWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      apexTriggers: (triggersRes.records || []).map(t => ({ name: t.Name, id: t.Id }))
     });
   } catch (err) {
     console.error('Apex sharing assessment error:', err);
@@ -702,6 +725,21 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('External access assessment error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Flow & Automation Sharing ─────────────────────────────────────────────────
+app.get('/api/assess/flow-sharing', requireAuth, async (req, res) => {
+  const conn = getConnection(req);
+  try {
+    const flowsRes = await safeToolingQuery(conn,
+      "SELECT ApiName, Label, IsActive, ProcessType, RunInMode " +
+      "FROM FlowDefinitionView WHERE IsActive = true LIMIT 500"
+    ).catch(() => ({ records: [] }));
+    res.json({ flows: flowsRes.records || [] });
+  } catch (err) {
+    console.error('Flow sharing assessment error:', err);
     res.status(500).json({ error: err.message });
   }
 });

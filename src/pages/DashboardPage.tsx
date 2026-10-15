@@ -6,11 +6,11 @@ import {
   getAuthStatus, getOwdData, getRoleHierarchyData, getTerritoriesData,
   getSharingRulesData, getManualSharingData, getApexSharingData,
   getRecordTeamsData, getGroupsQueuesData, getPermissionBypassesData,
-  getImplicitSharingData, getExternalAccessData
+  getImplicitSharingData, getExternalAccessData, getFlowSharingData
 } from '../services/api';
 import {
   assessOwd, assessRoleHierarchy, assessTerritories, assessSharingRules,
-  assessManualSharing, assessApexSharing, assessRecordTeams,
+  assessManualSharing, assessApexSharing, assessFlowSharing, assessRecordTeams,
   assessGroupsQueues, assessPermissionBypasses, assessImplicitSharing,
   assessExternalAccess, calculateOverallScore
 } from '../utils/scoring';
@@ -66,6 +66,9 @@ export const DashboardPage: React.FC = () => {
       setProgress('Scanning Apex sharing...');
       const apexSharingData = await getApexSharingData();
 
+      setProgress('Scanning flow sharing context...');
+      const flowSharingData = await getFlowSharingData();
+
       setProgress('Checking record teams...');
       const recordTeamsData = await getRecordTeamsData();
 
@@ -89,6 +92,7 @@ export const DashboardPage: React.FC = () => {
       const sharingRulesResult = assessSharingRules(sharingRulesData, owdEntities);
       const manualResult = assessManualSharing(manualSharingData, owdEntities);
       const apexResult = assessApexSharing(apexSharingData);
+      const flowResult = assessFlowSharing(flowSharingData, apexSharingData);
       const teamsResult = assessRecordTeams(recordTeamsData, owdEntities);
       const groupsResult = assessGroupsQueues(groupsQueuesData, owdEntities);
       const bypassResult = assessPermissionBypasses(bypassData);
@@ -97,7 +101,7 @@ export const DashboardPage: React.FC = () => {
 
       const result = calculateOverallScore([
         owdResult, roleResult, territoryResult, sharingRulesResult,
-        manualResult, apexResult, teamsResult, groupsResult,
+        manualResult, apexResult, flowResult, teamsResult, groupsResult,
         bypassResult, implicitResult, externalResult
       ]);
 

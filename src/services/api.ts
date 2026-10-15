@@ -55,3 +55,7 @@ export function getImplicitSharingData() {
 export function getExternalAccessData() {
   return apiFetch('/api/assess/external-access');
 }
+
+export function getFlowSharingData() {
+  return apiFetch('/api/assess/flow-sharing');
+}
