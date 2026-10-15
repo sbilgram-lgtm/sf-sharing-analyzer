@@ -57,11 +57,17 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high' },
     { title: 'Many Apex Classes Have No Sharing Declaration (50+)', severity: 'high' },
+    { title: '@AuraEnabled Methods in Without Sharing Classes — UI Endpoint Bypass', severity: 'high' },
+    { title: '@InvocableMethod Classes Without Sharing — Callable From Flows', severity: 'high' },
     { title: 'Apex Classes Run Without Sharing Enforcement (5+)', severity: 'medium' },
     { title: 'Apex Classes Have No Sharing Declaration', severity: 'medium' },
     { title: 'Apex-Managed Share Records Exceed 5,000 on an Object', severity: 'medium' },
+    { title: 'Batch Apex Classes Without Sharing Enforcement', severity: 'medium' },
+    { title: 'Scheduled Apex Classes Without Sharing Enforcement', severity: 'medium' },
     { title: 'Custom Apex Sharing Reasons Defined', severity: 'low' },
     { title: 'Custom Sharing Reasons Have No Corresponding Active Apex Class', severity: 'low' },
+    { title: 'Inherited Sharing Classes — Context Depends on Caller', severity: 'low' },
+    { title: 'Active Custom Apex Triggers — Always System Context', severity: 'low' },
   ],
   'Record Teams': [
     { title: 'Account Team Roles Grant Edit Access — Review Least Privilege', severity: 'medium' },
@@ -105,6 +111,14 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Criteria-Based Sharing Rules Target Guest Users', severity: 'high' },
     { title: 'Sharing Sets Grant Access to High-Volume Portal Users', severity: 'medium' },
   ],
+  'Flow & Automation Sharing': [
+    { title: 'Screen Flows Set to System Context Without Sharing', severity: 'high' },
+    { title: 'Record-Triggered Flows Set to System Context Without Sharing', severity: 'high' },
+    { title: 'Autolaunched Flows Run in System Context Without Sharing', severity: 'high' },
+    { title: 'Active Scheduled Flows — Always System Context', severity: 'medium' },
+    { title: 'Platform Event-Triggered Flows — Always System Context', severity: 'medium' },
+    { title: 'Active Flows Rely on Platform Default Run Mode', severity: 'low' },
+  ],
 };
 
 const TOTAL_CHECKS = Object.values(CATEGORY_CHECKS).reduce((sum, arr) => sum + arr.length, 0);
@@ -117,17 +131,18 @@ const GROUP_COLORS: Record<string, string> = {
 };
 
 const CATEGORIES = [
-  { icon: '🏠', name: 'OWD Analysis',            group: 'Foundation' },
-  { icon: '🔼', name: 'Role Hierarchy',           group: 'Foundation' },
-  { icon: '🗺️',  name: 'Territory Management',   group: 'Foundation' },
-  { icon: '📋', name: 'Sharing Rules',            group: 'Sharing' },
-  { icon: '✋', name: 'Manual Sharing',           group: 'Sharing' },
-  { icon: '⚡', name: 'Apex Sharing',             group: 'Sharing' },
-  { icon: '👥', name: 'Record Teams',             group: 'Access Control' },
-  { icon: '🗂️',  name: 'Groups & Queues',        group: 'Access Control' },
-  { icon: '🔑', name: 'Permission Bypasses',      group: 'Access Control' },
-  { icon: '🔗', name: 'Implicit Sharing',         group: 'Visibility' },
-  { icon: '🌐', name: 'External & Guest Access',  group: 'Visibility' },
+  { icon: '🏠', name: 'OWD Analysis',                group: 'Foundation' },
+  { icon: '🔼', name: 'Role Hierarchy',               group: 'Foundation' },
+  { icon: '🗺️',  name: 'Territory Management',       group: 'Foundation' },
+  { icon: '📋', name: 'Sharing Rules',                group: 'Sharing' },
+  { icon: '✋', name: 'Manual Sharing',               group: 'Sharing' },
+  { icon: '⚡', name: 'Apex Sharing',                 group: 'Sharing' },
+  { icon: '🔀', name: 'Flow & Automation Sharing',    group: 'Sharing' },
+  { icon: '👥', name: 'Record Teams',                 group: 'Access Control' },
+  { icon: '🗂️',  name: 'Groups & Queues',            group: 'Access Control' },
+  { icon: '🔑', name: 'Permission Bypasses',          group: 'Access Control' },
+  { icon: '🔗', name: 'Implicit Sharing',             group: 'Visibility' },
+  { icon: '🌐', name: 'External & Guest Access',      group: 'Visibility' },
 ];
 
 const labelStyle: React.CSSProperties = {
