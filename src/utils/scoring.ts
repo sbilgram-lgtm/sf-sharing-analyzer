@@ -525,7 +525,16 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
 }
 
 // ── Manual Sharing ────────────────────────────────────────────────────────────
-export function assessManualSharing(data: { manualShares: { object: string; count: number }[] }, owdEntities?: any[]): CategoryResult & { stats: any } {
+export function assessManualSharing(
+  data: {
+    manualShares: { object: string; count: number }[];
+    fullAccessShares?: { object: string; count: number }[];
+    roleShares?: { object: string; count: number }[];
+    inactiveShares?: { object: string; count: number }[];
+  },
+  owdEntities?: any[],
+  sharingRuleData?: { ownerRules: any[]; criteriaRules: any[] }
+): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Manual Sharing';
   const manualShares = data.manualShares || [];
@@ -549,6 +558,32 @@ export function assessManualSharing(data: { manualShares: { object: string; coun
     }
   }
 
+  // Full Access manual shares — grantee can re-share
+  const fullAccessShares = data.fullAccessShares || [];
+  const fullAccessObjects = fullAccessShares.filter(s => s.count > 0);
+  if (fullAccessObjects.length > 0) {
+    const totalFull = fullAccessObjects.reduce((sum, s) => sum + s.count, 0);
+    findings.push(createFinding(CAT, 'high',
+      `${totalFull.toLocaleString()} Manual Share${totalFull > 1 ? 's' : ''} Grant Full Access — Recipients Can Re-Share Records`,
+      'Full Access (owner-level) manual shares allow the grantee to share the record with additional users, transfer ownership, and in some cases delete the record. This creates an uncontrolled sharing escalation path that bypasses the intended access model.',
+      'Review all Full Access manual shares. Downgrade to Read Only or Read/Write unless owner-level access is explicitly required. Consider an Apex trigger to prevent Full Access manual sharing where not needed.',
+      { records: fullAccessObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} Full Access manual share${s.count > 1 ? 's' : ''}` })) }
+    ));
+  }
+
+  // Role/role+subordinates manual shares — unexpectedly broad
+  const roleShares = data.roleShares || [];
+  const roleShareObjects = roleShares.filter(s => s.count > 0);
+  if (roleShareObjects.length > 0) {
+    const totalRole = roleShareObjects.reduce((sum, s) => sum + s.count, 0);
+    findings.push(createFinding(CAT, 'medium',
+      `${totalRole.toLocaleString()} Manual Share${totalRole > 1 ? 's' : ''} Target Roles or Role Hierarchies — Potentially Broad Exposure`,
+      'Manual shares granted to a Role or Role and Subordinates group expose the record to every user in that role branch. A single share can silently grant access to dozens or hundreds of users, and access expands automatically as users are added to the role.',
+      'Review role-targeted manual shares. Confirm the intent is to share with the entire role branch. Where narrower access is needed, replace with individual user grants or criteria-based sharing rules.',
+      { records: roleShareObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} role-targeted manual share${s.count > 1 ? 's' : ''}` })) }
+    ));
+  }
+
   // Private OWD + high manual sharing = compensating pattern
   if (owdEntities && owdEntities.length > 0) {
     const privateOwdObjects = new Set(owdEntities.filter((e: any) => e.InternalSharingModel === 'Private').map((e: any) => e.QualifiedApiName));
@@ -562,6 +597,26 @@ export function assessManualSharing(data: { manualShares: { object: string; coun
       ));
     }
 
+    // Private OWD + no sharing rules + high manual volume — only access mechanism is manual
+    if (sharingRuleData) {
+      const objectsWithRules = new Set<string>();
+      [...(sharingRuleData.ownerRules || []), ...(sharingRuleData.criteriaRules || [])].forEach((r: any) => {
+        const apiName = r.EntityDefinition?.QualifiedApiName;
+        if (apiName) objectsWithRules.add(apiName);
+      });
+      const noRuleManualOnly = manualShares.filter(
+        s => s.count > 200 && privateOwdObjects.has(s.object) && !objectsWithRules.has(s.object)
+      );
+      if (noRuleManualOnly.length > 0) {
+        findings.push(createFinding(CAT, 'high',
+          `${noRuleManualOnly.length} Object${noRuleManualOnly.length > 1 ? 's Have' : ' Has'} Private OWD, No Sharing Rules, and High Manual Sharing — Manual Is the Only Access Mechanism`,
+          'These objects have a Private OWD with no sharing rules configured. All record access beyond the owner and their role chain depends entirely on manual sharing. This is not scalable and creates significant risk when users leave or change roles.',
+          'Design an automated access strategy for these objects: criteria-based sharing rules, role hierarchy adjustments, or Apex managed sharing. Manual sharing should supplement an automated model, not replace it.',
+          { records: noRuleManualOnly.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} manual shares, OWD: Private, 0 sharing rules` })) }
+        ));
+      }
+    }
+
     // Manual shares on Public OWD objects — redundant
     const publicOwdObjects = new Set(owdEntities.filter((e: any) => e.InternalSharingModel === 'ReadWrite').map((e: any) => e.QualifiedApiName));
     const redundantShares = manualShares.filter(s => s.count > 0 && publicOwdObjects.has(s.object));
@@ -573,6 +628,19 @@ export function assessManualSharing(data: { manualShares: { object: string; coun
         { records: redundantShares.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} manual shares, OWD: Public Read/Write` })) }
       ));
     }
+  }
+
+  // Manual shares to inactive users — stale grants
+  const inactiveShares = data.inactiveShares || [];
+  const inactiveShareObjects = inactiveShares.filter(s => s.count > 0);
+  if (inactiveShareObjects.length > 0) {
+    const totalInactive = inactiveShareObjects.reduce((sum, s) => sum + s.count, 0);
+    findings.push(createFinding(CAT, 'medium',
+      `${totalInactive.toLocaleString()} Manual Share${totalInactive > 1 ? 's' : ''} Are Granted to Inactive Users`,
+      'Manual share records remain in Salesforce after a user is deactivated. While inactive users cannot log in, these shares consume sharing calculation resources and create a risk if the user account is ever reactivated — access is immediately restored with no review.',
+      'Run a data cleanup to delete manual share records where the UserOrGroupId belongs to an inactive user. Implement a deactivation checklist or automation to remove manual shares as part of the offboarding process.',
+      { records: inactiveShareObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} share${s.count > 1 ? 's' : ''} to inactive users` })) }
+    ));
   }
 
   return {
@@ -1430,7 +1498,7 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
 }
 
 // ── External & Guest Access ───────────────────────────────────────────────────
-export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[] }): CategoryResult & { stats: any } {
+export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[]; portalTargetedRules?: any[] }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'External & Guest Access';
   const guestProfiles: any[] = data.guestProfiles || [];
@@ -1504,6 +1572,37 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Authenticated Experience Cloud users (Partner Community, Customer Community) access records via Sharing Sets, sharing rules, or standard sharing. As user counts grow, the sharing model must be intentional and not over-expose records through non-Private external OWD.',
       'Audit the sharing access for each Experience Cloud user license type. Confirm Sharing Sets are correctly scoped. Verify no object has a non-Private external OWD that inadvertently exposes records to all portal users.',
       { records: portalUserCounts.filter((r: any) => (r.cnt || r.expr0 || 0) > 0).map((r: any) => ({ name: r.UserType, detail: `${(r.cnt || r.expr0 || 0).toLocaleString()} active users` })) }
+    ));
+  }
+
+  // Sharing rules targeting portal roles — hierarchy cascades for external users
+  const portalTargetedRules: any[] = (data as any).portalTargetedRules || [];
+  if (portalTargetedRules.length > 0) {
+    const byType = new Map<string, number>();
+    const byObject = new Map<string, number>();
+    portalTargetedRules.forEach((r: any) => {
+      byType.set(r.SharedToType, (byType.get(r.SharedToType) || 0) + 1);
+      const obj = r.EntityDefinition?.QualifiedApiName || 'Unknown';
+      byObject.set(obj, (byObject.get(obj) || 0) + 1);
+    });
+    findings.push(createFinding(CAT, 'medium',
+      `${portalTargetedRules.length} Sharing Rule${portalTargetedRules.length > 1 ? 's Target' : ' Targets'} External User Portal Roles or Role Hierarchies`,
+      'Sharing rules scoped to Portal Roles or Portal Roles and Subordinates grant access to every external user in that portal role branch, including all subordinate roles. This mirrors the same hierarchy-escalation risk as internal role sharing — a single rule can expose records to a broad set of external users.',
+      'Review each portal-role-targeted sharing rule. Confirm the scope matches the intended audience. For narrower external access, use criteria-based sharing rules with explicit field conditions rather than role hierarchy targeting.',
+      { records: Array.from(byObject.entries()).map(([obj, cnt]) => ({ name: obj, detail: `${cnt} portal-role-targeted rule${cnt > 1 ? 's' : ''}` })) }
+    ));
+  }
+
+  // Customer Community Plus users — participate in role hierarchy
+  const ccPlusCount = portalUserCounts
+    .filter((r: any) => r.UserType === 'PowerCustomerSuccess')
+    .reduce((sum: number, r: any) => sum + (r.cnt || r.expr0 || 0), 0);
+  if (ccPlusCount > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${ccPlusCount.toLocaleString()} Customer Community Plus User${ccPlusCount > 1 ? 's' : ''} Active — External Users Participate in Role Hierarchy`,
+      'Customer Community Plus (CC+) users are assigned portal roles and participate in the Experience Cloud role hierarchy. Unlike standard Community users, CC+ users can see records owned by users below them in the portal role hierarchy, and their access expands as more users join the same portal role branch.',
+      'Audit the portal role hierarchy structure for CC+ users. Ensure records visible via portal role hierarchy are intentional. Review external OWD settings and sharing rules to confirm CC+ users can only access records they should.',
+      { count: ccPlusCount }
     ));
   }
 

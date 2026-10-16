@@ -90,7 +90,7 @@ export const DashboardPage: React.FC = () => {
       const roleResult = assessRoleHierarchy(roleData);
       const territoryResult = assessTerritories(territoryData);
       const sharingRulesResult = assessSharingRules(sharingRulesData, owdEntities);
-      const manualResult = assessManualSharing(manualSharingData, owdEntities);
+      const manualResult = assessManualSharing(manualSharingData, owdEntities, sharingRulesData);
       const apexResult = assessApexSharing(apexSharingData);
       const flowResult = assessFlowSharing(flowSharingData, apexSharingData);
       const teamsResult = assessRecordTeams(recordTeamsData, owdEntities);

@@ -342,16 +342,24 @@ app.get('/api/assess/manual-sharing', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
     const objects = ['Account', 'Case', 'Opportunity', 'Contact', 'Lead', 'Campaign'];
-    const shareQueries = objects.map(obj =>
-      safeQuery(conn,
-        `SELECT COUNT(Id) shareCount FROM ${obj}Share WHERE RowCause = 'Manual'`
-      ).then(r => ({
-        object: obj,
-        count: (r.records[0] || {}).shareCount || (r.records[0] || {}).expr0 || 0
-      })).catch(() => ({ object: obj, count: 0 }))
-    );
-    const manualShares = await Promise.all(shareQueries);
-    res.json({ manualShares });
+    const accessLevelField = {
+      Account: 'AccountAccessLevel', Case: 'CaseAccessLevel', Opportunity: 'OpportunityAccessLevel',
+      Contact: 'ContactAccessLevel', Lead: 'LeadAccessLevel', Campaign: 'CampaignAccessLevel'
+    };
+
+    const makeCount = (obj, where) =>
+      safeQuery(conn, `SELECT COUNT(Id) cnt FROM ${obj}Share WHERE RowCause = 'Manual'${where ? ' AND ' + where : ''}`)
+        .then(r => ({ object: obj, count: (r.records[0] || {}).cnt || (r.records[0] || {}).expr0 || 0 }))
+        .catch(() => ({ object: obj, count: 0 }));
+
+    const [manualShares, fullAccessShares, roleShares, inactiveShares] = await Promise.all([
+      Promise.all(objects.map(obj => makeCount(obj, null))),
+      Promise.all(objects.map(obj => makeCount(obj, `${accessLevelField[obj]} = 'All'`))),
+      Promise.all(objects.map(obj => makeCount(obj, `UserOrGroupId IN (SELECT Id FROM Group WHERE Type IN ('Role', 'RoleAndSubordinates', 'RoleAndSubordinatesInternal'))`))),
+      Promise.all(objects.map(obj => makeCount(obj, `UserOrGroupId IN (SELECT Id FROM User WHERE IsActive = false)`)))
+    ]);
+
+    res.json({ manualShares, fullAccessShares, roleShares, inactiveShares });
   } catch (err) {
     console.error('Manual sharing assessment error:', err);
     res.status(500).json({ error: err.message });
@@ -703,8 +711,10 @@ app.get('/api/assess/implicit-sharing', requireAuth, async (req, res) => {
 app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
+    const PORTAL_SHARED_TO_TYPES = "'PortalRole','PortalRoleAndSubordinates','AllCustomerPortalUsers','AllPartnerUsers'";
     const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes,
-           portalUserCountsRes, portalUsersWithBypassRes] = await Promise.all([
+           portalUserCountsRes, portalUsersWithBypassRes,
+           portalOwnerRulesRes, portalCriteriaRulesRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -724,6 +734,12 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
         "SELECT Id, Name, UserType, Profile.Name FROM User WHERE IsActive = true " +
         "AND UserType IN ('PowerPartner','PowerCustomerSuccess','CspLitePortal') " +
         "AND (Profile.PermissionsViewAllData = true OR Profile.PermissionsModifyAllData = true) LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        `SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType FROM OwnerSharingRule WHERE SharedToType IN (${PORTAL_SHARED_TO_TYPES}) LIMIT 200`
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        `SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType FROM CriteriaBasedSharingRule WHERE SharedToType IN (${PORTAL_SHARED_TO_TYPES}) LIMIT 200`
       ).catch(() => ({ records: [] }))
     ]);
     res.json({
@@ -732,7 +748,11 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       sharingSets: sharingSetRes.records || [],
       guestSharingRules: guestSharingRulesRes.records || [],
       portalUserCounts: portalUserCountsRes.records || [],
-      portalUsersWithBypass: portalUsersWithBypassRes.records || []
+      portalUsersWithBypass: portalUsersWithBypassRes.records || [],
+      portalTargetedRules: [
+        ...(portalOwnerRulesRes.records || []),
+        ...(portalCriteriaRulesRes.records || [])
+      ]
     });
   } catch (err) {
     console.error('External access assessment error:', err);

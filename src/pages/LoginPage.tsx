@@ -50,9 +50,13 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
   ],
   'Manual Sharing': [
     { title: 'Object Has Very High Manual Share Volume (10,000+)', severity: 'high' },
-    { title: 'Object Has High Manual Share Volume (1,000+)', severity: 'medium' },
+    { title: 'Manual Shares Grant Full Access — Recipients Can Re-Share Records', severity: 'high' },
+    { title: 'Private OWD, No Sharing Rules, and High Manual Sharing — Manual Is the Only Access Mechanism', severity: 'high' },
     { title: 'Private OWD Object Relies Heavily on Manual Sharing (500+)', severity: 'medium' },
+    { title: 'Object Has High Manual Share Volume (1,000+)', severity: 'medium' },
+    { title: 'Manual Shares Target Roles or Role Hierarchies — Potentially Broad Exposure', severity: 'medium' },
     { title: 'Manual Shares Exist on Public Read/Write OWD Objects', severity: 'medium' },
+    { title: 'Manual Shares Are Granted to Inactive Users', severity: 'medium' },
   ],
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high' },
@@ -113,6 +117,8 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Objects Are Accessible to External/Guest Users', severity: 'high' },
     { title: 'Criteria-Based Sharing Rules Target Guest Users', severity: 'high' },
     { title: 'Sharing Sets Grant Access to High-Volume Portal Users', severity: 'medium' },
+    { title: 'Sharing Rules Target External User Portal Roles or Role Hierarchies', severity: 'medium' },
+    { title: 'Customer Community Plus Users Active — External Users Participate in Role Hierarchy', severity: 'low' },
   ],
   'Flow & Automation Sharing': [
     { title: 'Screen Flows Set to System Context Without Sharing', severity: 'high' },
