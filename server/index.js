@@ -326,7 +326,7 @@ app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
       ).catch(() => ({ records: [] })),
       safeQuery(conn,
         "SELECT GroupId FROM GroupMember WHERE UserOrGroupId IN " +
-        "(SELECT Id FROM Group WHERE Type IN ('Role', 'RoleAndSubordinates', 'RoleAndSubordinatesInternal')) LIMIT 500"
+        "(SELECT Id FROM Group WHERE Type IN ('Role', 'RoleAndSubordinates', 'RoleAndSubordinatesInternal')) LIMIT 2000"
       ).catch(() => ({ records: [] }))
     ]);
     const allInternalGroupId = (allInternalGroupRes.records[0] || {}).Id || null;

@@ -51,26 +51,6 @@ export function assessOwd(data: { entities: any[] }): CategoryResult & { invento
     ));
   });
 
-  const rwExternalEntities = entities.filter(e => e.ExternalSharingModel === 'ReadWrite');
-  if (rwExternalEntities.length > 0) {
-    findings.push(createFinding(CAT, 'critical',
-      `${rwExternalEntities.length} Object${rwExternalEntities.length > 1 ? 's' : ''} Have External OWD Set to Public Read/Write`,
-      'Guest users and portal users can read and edit all records on these objects. This is almost never intentional and represents a critical data exposure risk.',
-      'Immediately review and restrict external OWD settings. No object should be Public Read/Write externally unless it was explicitly designed for guest write access.',
-      { records: rwExternalEntities.map(e => ({ name: e.Label, detail: `External OWD: ${e.ExternalSharingModel}` })) }
-    ));
-  }
-
-  const readExternalEntities = entities.filter(e => e.ExternalSharingModel === 'Read');
-  if (readExternalEntities.length > 0) {
-    findings.push(createFinding(CAT, 'medium',
-      `${readExternalEntities.length} Object${readExternalEntities.length > 1 ? 's' : ''} Are Publicly Readable by External Users`,
-      'Objects with external OWD of Public Read are visible to all Experience Cloud and portal users. Review whether all of these objects should be broadly accessible.',
-      'Review each object. If external visibility is not intentional, set external OWD to Private and use sharing rules or sharing sets to grant access to specific portal users.',
-      { records: readExternalEntities.map(e => ({ name: e.Label, detail: `External OWD: ${e.ExternalSharingModel}` })) }
-    ));
-  }
-
   const rwInternalAll = entities.filter(e => e.InternalSharingModel === 'ReadWrite');
   if (rwInternalAll.length > 10) {
     findings.push(createFinding(CAT, 'medium',
@@ -225,6 +205,7 @@ export function assessRoleHierarchy(data: {
   const totalRoleCount: number = data.totalRoleCount || 0;
   const topLevelRoleUsers: any[] = data.topLevelRoleUsers || [];
   const emptyRoles: any[] = data.emptyRoles || [];
+  const roleNamesMap = new Map<string, string>(allRoles.map((r: any) => [r.Id, r.Name]));
 
   // Compute max depth and max breadth via tree traversal
   const parentMap = new Map<string, string | null>(allRoles.map((r: any) => [r.Id, r.ParentRoleId]));
@@ -295,7 +276,7 @@ export function assessRoleHierarchy(data: {
       `${topLevelWithManyUsers.length} Top-Level Role${topLevelWithManyUsers.length > 1 ? 's Have' : ' Has'} More Than 5 Users`,
       'Users in top-level roles can see all records below them in the hierarchy. Top-level roles should contain only executive or admin users — widespread use inflates record visibility and undermines least-privilege access.',
       'Review which users are assigned to top-level roles. Move non-executive users to appropriate roles lower in the hierarchy.',
-      { records: topLevelWithManyUsers.map((r: any) => ({ name: r.UserRoleId, detail: `${r.userCount || r.expr0} active users` })) }
+      { records: topLevelWithManyUsers.map((r: any) => ({ name: roleNamesMap.get(r.UserRoleId) || r.UserRoleId, detail: `${r.userCount || r.expr0} active users` })) }
     ));
   }
 
