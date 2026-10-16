@@ -155,6 +155,54 @@ export function assessOwd(data: { entities: any[] }): CategoryResult & { invento
     ));
   }
 
+  // ── Grant Access Using Hierarchies ──────────────────────────────────────────
+  const gauhDisabled = entities.filter((e: any) => e.GrantAccessUsingHierarchies === false);
+  const gauhPrivate = gauhDisabled.filter((e: any) => e.InternalSharingModel === 'Private');
+  const gauhOther = gauhDisabled.filter((e: any) => e.InternalSharingModel !== 'Private' && e.InternalSharingModel !== 'ReadWrite' && e.InternalSharingModel !== 'ControlledByParent');
+  if (gauhPrivate.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${gauhPrivate.length} Object${gauhPrivate.length > 1 ? 's Have' : ' Has'} Private OWD With "Grant Access Using Hierarchies" Disabled`,
+      'When GAUH is disabled on a Private OWD object, the role hierarchy grants no record access at all — only the record owner and users with explicit sharing grants can see the record. Managers cannot see their team\'s records. This is almost always unintentional and can cause significant access gaps.',
+      'Review each object. If managers should see subordinates\' records (the typical expectation), re-enable GAUH. If the restriction is intentional, document it explicitly in your sharing architecture.',
+      { records: gauhPrivate.map((e: any) => ({ name: e.Label, detail: 'Private OWD, GAUH disabled — managers see no subordinate records' })) }
+    ));
+  }
+  if (gauhOther.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${gauhOther.length} Object${gauhOther.length > 1 ? 's Have' : ' Has'} "Grant Access Using Hierarchies" Disabled — Role Hierarchy Grants No Access`,
+      'With GAUH disabled, the role hierarchy does not grant access to records on these objects. Users above the owner in the hierarchy must have explicit sharing grants to view or edit records.',
+      'Confirm this setting is intentional. If role-based access is expected, re-enable GAUH. If disabled for compliance reasons, ensure sharing rules or explicit grants are in place for all required access paths.',
+      { records: gauhOther.map((e: any) => ({ name: e.Label, detail: `OWD: ${e.InternalSharingModel}, GAUH disabled` })) }
+    ));
+  }
+
+  // ── Custom objects with Controlled by Parent OWD ─────────────────────────
+  const customCbP = entities.filter((e: any) => e.IsCustom === true && e.InternalSharingModel === 'ControlledByParent');
+  if (customCbP.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${customCbP.length} Custom Object${customCbP.length > 1 ? 's Use' : ' Uses'} Controlled by Parent OWD — Sharing Delegated to Parent Record`,
+      'These custom objects have a master-detail relationship and inherit record access from their parent. Any change to the parent\'s sharing model — OWD, sharing rules, ownership, or role hierarchy — directly and immediately affects visibility of all child records on these objects.',
+      'Document these parent-child dependencies in your sharing architecture. When planning changes to parent object sharing (especially Account, Opportunity, or Case), evaluate the cascading impact on all Controlled by Parent children.',
+      { records: customCbP.map((e: any) => ({ name: e.Label, detail: 'Custom object, sharing controlled by parent' })) }
+    ));
+  }
+
+  // ── Split internal vs external OWD ──────────────────────────────────────
+  const permOrder: Record<string, number> = { ReadWrite: 3, Read: 2, Private: 1 };
+  const splitOwd = entities.filter((e: any) => {
+    const intP = permOrder[e.InternalSharingModel] || 0;
+    const extP = permOrder[e.ExternalSharingModel] || 0;
+    return extP > 0 && extP < intP;
+  });
+  if (splitOwd.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${splitOwd.length} Object${splitOwd.length > 1 ? 's Have' : ' Has'} a Stricter External OWD Than Internal OWD — Split Access Model in Place`,
+      'These objects allow broader access for internal users than for Experience Cloud or portal users. This is intentional security-by-design when configured deliberately, but should be reviewed periodically to confirm the split remains appropriate and portal users aren\'t inadvertently blocked.',
+      'Review each split-OWD object. Confirm the external restriction is intentional. Document which portal user types are affected and how they are granted access (sharing sets, sharing rules) where needed.',
+      { records: splitOwd.map((e: any) => ({ name: e.Label, detail: `Internal: ${e.InternalSharingModel}, External: ${e.ExternalSharingModel}` })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -376,7 +424,7 @@ export function assessTerritories(data: {
 }
 
 // ── Sharing Rules ─────────────────────────────────────────────────────────────
-export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[]; allInternalGroupId?: string | null }, owdEntities?: any[]): CategoryResult & { stats: any } {
+export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any[]; allInternalGroupId?: string | null; groupsWithRoleMembers?: string[] }, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Sharing Rules';
 
@@ -502,6 +550,55 @@ export function assessSharingRules(data: { ownerRules: any[]; criteriaRules: any
       'Review each scoping rule. Confirm it is documented as a UI productivity control only. Ensure any data security requirement is enforced through OWD, sharing rules, restriction rules, or field-level security — not scoping rules.',
       { records: Array.from(byObject.entries()).map(([obj, count]) => ({ name: obj, detail: `${count} scoping rule${count > 1 ? 's' : ''}` })) }
     ));
+  }
+
+  // Objects with only owner-based sharing rules — less adaptive to data changes
+  const ownerOnlyObjects = Array.from(rulesByObject.entries())
+    .filter(([, counts]) => counts.ownerCount >= 3 && counts.criteriaCount === 0)
+    .map(([obj]) => obj);
+  if (ownerOnlyObjects.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${ownerOnlyObjects.length} Object${ownerOnlyObjects.length > 1 ? 's Rely' : ' Relies'} Exclusively on Owner-Based Sharing Rules`,
+      'Owner-based sharing rules grant access based on record ownership only — they cannot respond to field value changes. If records change status, territory, or classification and need different access, only criteria-based rules can react automatically.',
+      'Evaluate whether any of these objects would benefit from criteria-based sharing rules that respond to field values (e.g., share a Case when Status = \'Escalated\'). Owner-based rules remain valid but should be the deliberate choice, not the default.',
+      { records: ownerOnlyObjects.map(obj => { const c = rulesByObject.get(obj)!; return { name: obj, detail: `${c.ownerCount} owner-based rule${c.ownerCount > 1 ? 's' : ''}, 0 criteria-based` }; }) }
+    ));
+  }
+
+  // Objects with many criteria-based sharing rules but no restriction rules — potential over-sharing
+  const restrictionRulesByObject = new Set<string>(
+    (restrictionRules as any[]).map((r: any) => r.EntityDefinition?.QualifiedApiName).filter(Boolean)
+  );
+  const criteriaHeavyNoRestriction = Array.from(rulesByObject.entries())
+    .filter(([obj, counts]) => counts.criteriaCount >= 5 && !restrictionRulesByObject.has(obj));
+  if (criteriaHeavyNoRestriction.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${criteriaHeavyNoRestriction.length} Object${criteriaHeavyNoRestriction.length > 1 ? 's Have' : ' Has'} 5+ Criteria-Based Sharing Rules But No Restriction Rules`,
+      'Many criteria-based sharing rules indicate complex, additive access grants with multiple paths that open record visibility. Without restriction rules to provide a counterbalancing narrowing filter, the cumulative effect may grant broader access than intended.',
+      'Evaluate whether restriction rules could simplify the sharing model for these objects — restricting a subset of users from seeing records that OWD or sharing rules would otherwise expose. Restriction rules work independently of OWD and can significantly reduce audit complexity.',
+      { records: criteriaHeavyNoRestriction.map(([obj, counts]) => ({ name: obj, detail: `${counts.criteriaCount} criteria-based rules, no restriction rules` })) }
+    ));
+  }
+
+  // Sharing rules targeting public groups that contain role-type group members
+  const groupsWithRoleMembers = new Set<string>(data.groupsWithRoleMembers || []);
+  if (groupsWithRoleMembers.size > 0) {
+    const rulesTargetingRoleGroups = [...ownerRules, ...criteriaRules].filter(r =>
+      r.SharedToType === 'Group' && groupsWithRoleMembers.has(r.SharedToId)
+    );
+    if (rulesTargetingRoleGroups.length > 0) {
+      const byObject = new Map<string, number>();
+      rulesTargetingRoleGroups.forEach((r: any) => {
+        const obj = r.EntityDefinition?.QualifiedApiName || 'Unknown';
+        byObject.set(obj, (byObject.get(obj) || 0) + 1);
+      });
+      findings.push(createFinding(CAT, 'medium',
+        `${rulesTargetingRoleGroups.length} Sharing Rule${rulesTargetingRoleGroups.length > 1 ? 's Target' : ' Targets'} Public Groups That Contain Role or Role Hierarchy Members`,
+        'Public groups used as sharing rule targets that contain role-type groups expose records to every user in those role branches — including future users added to those roles. The effective audience expands automatically as role membership changes, making the true set of users with access difficult to audit.',
+        'Review the membership of each targeted public group. If role-hierarchy exposure is broader than intended, replace role-type group members with explicit user or profile-based members. Document why each role branch needs access to the affected objects.',
+        { records: Array.from(byObject.entries()).map(([obj, cnt]) => ({ name: obj, detail: `${cnt} rule${cnt > 1 ? 's' : ''} targeting groups with role members` })) }
+      ));
+    }
   }
 
   // Build summary for inventory
@@ -1498,7 +1595,7 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
 }
 
 // ── External & Guest Access ───────────────────────────────────────────────────
-export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[]; portalTargetedRules?: any[] }): CategoryResult & { stats: any } {
+export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[]; portalTargetedRules?: any[]; knowledgeCategories?: any[] }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'External & Guest Access';
   const guestProfiles: any[] = data.guestProfiles || [];
@@ -1603,6 +1700,31 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Customer Community Plus (CC+) users are assigned portal roles and participate in the Experience Cloud role hierarchy. Unlike standard Community users, CC+ users can see records owned by users below them in the portal role hierarchy, and their access expands as more users join the same portal role branch.',
       'Audit the portal role hierarchy structure for CC+ users. Ensure records visible via portal role hierarchy are intentional. Review external OWD settings and sharing rules to confirm CC+ users can only access records they should.',
       { count: ccPlusCount }
+    ));
+  }
+
+  // HVPUs active with no Sharing Sets — no record access path
+  const hvpuCount = portalUserCounts
+    .filter((r: any) => r.UserType === 'CspLitePortal')
+    .reduce((sum: number, r: any) => sum + (r.cnt || r.expr0 || 0), 0);
+  if (hvpuCount > 0 && sharingSets.length === 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${hvpuCount.toLocaleString()} High-Volume Portal User${hvpuCount > 1 ? 's Are' : ' Is'} Active But No Sharing Sets Are Defined`,
+      'High-Volume Portal Users (HVPUs) are excluded from the standard Salesforce sharing model — they cannot be targeted by sharing rules and do not participate in the role hierarchy. Sharing Sets are the only mechanism to grant HVPUs record access. Without any Sharing Sets, these users have no path to access records.',
+      'Create Sharing Sets for each HVPU profile and object they need to access. Map the Sharing Set access field to the appropriate relationship field (e.g., AccountId or ContactId) to grant access to records the user is related to.',
+      { count: hvpuCount }
+    ));
+  }
+
+  // Knowledge data categories — separate visibility model in place
+  const knowledgeCategories: any[] = (data as any).knowledgeCategories || [];
+  const knowledgeCatGroups = knowledgeCategories.filter((c: any) => c.ObjectType === 'KnowledgeArticle' || !c.ObjectType);
+  if (knowledgeCatGroups.length > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${knowledgeCatGroups.length} Knowledge Data Category Group${knowledgeCatGroups.length > 1 ? 's Are' : ' Is'} Active — Separate Visibility Model in Place`,
+      'Salesforce Knowledge uses data category groups to control article visibility, independently of the standard sharing model. Users and portal/community users see only articles in categories visible to their profile or permission set. This visibility is not reflected in standard sharing checks and must be audited separately.',
+      'Audit data category visibility assignments for all profiles and permission sets. Confirm guest users (unauthenticated) cannot access categories containing sensitive content. Verify that portal user profiles have the correct category visibility for their intended audience.',
+      { records: knowledgeCatGroups.map((c: any) => ({ name: c.Name, detail: 'Knowledge data category group' })) }
     ));
   }
 

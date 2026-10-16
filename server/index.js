@@ -210,7 +210,8 @@ app.get('/api/assess/owd', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
     const entityDefsRes = await safeToolingQuery(conn,
-      "SELECT QualifiedApiName, Label, InternalSharingModel, ExternalSharingModel " +
+      "SELECT QualifiedApiName, Label, InternalSharingModel, ExternalSharingModel, " +
+      "GrantAccessUsingHierarchies, IsCustom " +
       "FROM EntityDefinition WHERE IsCustomizable = true AND IsDeprecated = false " +
       "ORDER BY Label LIMIT 500"
     );
@@ -306,7 +307,8 @@ app.get('/api/assess/territories', requireAuth, async (req, res) => {
 app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
   const conn = getConnection(req);
   try {
-    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes, restrictionRulesRes, scopingRulesRes] = await Promise.all([
+    const [ownerRulesRes, criteriaRulesRes, allInternalGroupRes, restrictionRulesRes, scopingRulesRes,
+           roleGroupMembersRes] = await Promise.all([
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType, SharedToId " +
         "FROM OwnerSharingRule LIMIT 2000"
@@ -321,15 +323,21 @@ app.get('/api/assess/sharing-rules', requireAuth, async (req, res) => {
       ).catch(() => ({ records: [] })),
       safeToolingQuery(conn,
         "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName FROM ScopingRule LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT GroupId FROM GroupMember WHERE UserOrGroupId IN " +
+        "(SELECT Id FROM Group WHERE Type IN ('Role', 'RoleAndSubordinates', 'RoleAndSubordinatesInternal')) LIMIT 500"
       ).catch(() => ({ records: [] }))
     ]);
     const allInternalGroupId = (allInternalGroupRes.records[0] || {}).Id || null;
+    const groupsWithRoleMembers = [...new Set((roleGroupMembersRes.records || []).map(r => r.GroupId))];
     res.json({
       ownerRules: ownerRulesRes.records || [],
       criteriaRules: criteriaRulesRes.records || [],
       allInternalGroupId,
       restrictionRules: restrictionRulesRes.records || [],
-      scopingRules: scopingRulesRes.records || []
+      scopingRules: scopingRulesRes.records || [],
+      groupsWithRoleMembers
     });
   } catch (err) {
     console.error('Sharing rules assessment error:', err);
@@ -714,7 +722,8 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
     const PORTAL_SHARED_TO_TYPES = "'PortalRole','PortalRoleAndSubordinates','AllCustomerPortalUsers','AllPartnerUsers'";
     const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes,
            portalUserCountsRes, portalUsersWithBypassRes,
-           portalOwnerRulesRes, portalCriteriaRulesRes] = await Promise.all([
+           portalOwnerRulesRes, portalCriteriaRulesRes,
+           knowledgeCategoriesRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -740,6 +749,9 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       ).catch(() => ({ records: [] })),
       safeToolingQuery(conn,
         `SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType FROM CriteriaBasedSharingRule WHERE SharedToType IN (${PORTAL_SHARED_TO_TYPES}) LIMIT 200`
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, ObjectType FROM DataCategoryGroup WHERE IsActive = true LIMIT 100"
       ).catch(() => ({ records: [] }))
     ]);
     res.json({
@@ -752,7 +764,8 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       portalTargetedRules: [
         ...(portalOwnerRulesRes.records || []),
         ...(portalCriteriaRulesRes.records || [])
-      ]
+      ],
+      knowledgeCategories: knowledgeCategoriesRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);
