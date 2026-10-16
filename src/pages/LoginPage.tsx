@@ -99,6 +99,9 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Users Hold the Customize Application Permission', severity: 'medium' },
     { title: 'No Expiring Permission Set Assignments Detected', severity: 'low' },
     { title: 'No User Access Policies Defined', severity: 'low' },
+    { title: 'Private OWD Objects Have Permission Sets Granting View All / Modify All Records', severity: 'high' },
+    { title: 'Public Read OWD Objects Have Permission Sets Granting Modify All Records', severity: 'high' },
+    { title: 'View All / Modify All Grants on Public Read/Write OWD Objects — Redundant', severity: 'low' },
   ],
   'Implicit Sharing': [
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium' },

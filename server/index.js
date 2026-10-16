@@ -535,7 +535,8 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       expiringPsaRes,
       uapCountRes,
       unassignedVadProfilesRes, unassignedMadProfilesRes,
-      unassignedVadPsRes, unassignedMadPsRes
+      unassignedVadPsRes, unassignedMadPsRes,
+      psViewAllRes, psModifyAllRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, UserType, LastLoginDate, Profile.Name FROM User " +
@@ -603,6 +604,14 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
         "AND IsOwnedByProfile = false AND NamespacePrefix = null " +
         "AND Id NOT IN (SELECT PermissionSetId FROM PermissionSetAssignment " +
         "WHERE Assignee.IsActive = true) LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT SobjectType, Parent.Name, Parent.Label FROM ObjectPermissions " +
+        "WHERE PermissionsViewAllRecords = true AND Parent.IsOwnedByProfile = false LIMIT 1000"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT SobjectType, Parent.Name, Parent.Label FROM ObjectPermissions " +
+        "WHERE PermissionsModifyAllRecords = true AND Parent.IsOwnedByProfile = false LIMIT 1000"
       ).catch(() => ({ records: [] }))
     ]);
 
@@ -663,7 +672,9 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       unassignedVadProfiles: unassignedVadProfilesRes.records || [],
       unassignedMadProfiles: unassignedMadProfilesRes.records || [],
       unassignedVadPermSets: unassignedVadPsRes.records || [],
-      unassignedMadPermSets: unassignedMadPsRes.records || []
+      unassignedMadPermSets: unassignedMadPsRes.records || [],
+      psViewAllObjectPerms: psViewAllRes.records || [],
+      psModifyAllObjectPerms: psModifyAllRes.records || []
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);

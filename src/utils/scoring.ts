@@ -1072,7 +1072,9 @@ export function assessPermissionBypasses(data: {
   viewAllObjectPerms: any[];
   modifyAllObjectPerms: any[];
   totalActiveUsers?: number;
-}): CategoryResult & { stats: any } {
+  psViewAllObjectPerms?: any[];
+  psModifyAllObjectPerms?: any[];
+}, owdEntities?: any[]): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Permission Bypasses';
 
@@ -1132,6 +1134,73 @@ export function assessPermissionBypasses(data: {
       'Audit which profiles and permission sets grant Modify All Records. Restrict to only objects where bulk admin access is genuinely required.',
       { count: modifyAllObjects.size }
     ));
+  }
+
+  // ── PS × OWD cross-reference checks ───────────────────────────────────────
+  const psViewAllPerms: any[] = data.psViewAllObjectPerms || [];
+  const psModifyAllPerms: any[] = data.psModifyAllObjectPerms || [];
+
+  if (owdEntities && owdEntities.length > 0 && (psViewAllPerms.length > 0 || psModifyAllPerms.length > 0)) {
+    const owdMap = new Map<string, string>();
+    for (const e of owdEntities) owdMap.set(e.QualifiedApiName, e.InternalSharingModel);
+
+    // Check 1: PS grants View All / Modify All on Private OWD objects
+    const privateViewAll = psViewAllPerms.filter(p => owdMap.get(p.SobjectType) === 'Private');
+    const privateModAll  = psModifyAllPerms.filter(p => owdMap.get(p.SobjectType) === 'Private');
+    if (privateViewAll.length > 0 || privateModAll.length > 0) {
+      const byObj = new Map<string, { va: string[]; ma: string[] }>();
+      for (const p of privateViewAll) {
+        if (!byObj.has(p.SobjectType)) byObj.set(p.SobjectType, { va: [], ma: [] });
+        byObj.get(p.SobjectType)!.va.push(p.Parent?.Name || p.Parent?.Label || 'Unknown PS');
+      }
+      for (const p of privateModAll) {
+        if (!byObj.has(p.SobjectType)) byObj.set(p.SobjectType, { va: [], ma: [] });
+        byObj.get(p.SobjectType)!.ma.push(p.Parent?.Name || p.Parent?.Label || 'Unknown PS');
+      }
+      findings.push(createFinding(CAT, byObj.size > 5 ? 'critical' : 'high',
+        `${byObj.size} Private OWD Object${byObj.size > 1 ? 's Have' : ' Has'} Permission Sets Granting View All / Modify All Records`,
+        'Permission sets granting View All or Modify All Records on Private OWD objects bypass the sharing model entirely for every holder — a targeted, object-level sharing bypass that does not appear in standard VAD/MAD user reports.',
+        'Review each permission set listed. Remove View All / Modify All Records grants where the sharing model (OWD + sharing rules + role hierarchy) should govern access instead. Document any justified exceptions.',
+        { records: Array.from(byObj.entries()).map(([obj, g]) => ({
+            name: obj,
+            detail: [
+              g.va.length ? `View All: ${g.va.slice(0, 3).join(', ')}${g.va.length > 3 ? ` +${g.va.length - 3} more` : ''}` : '',
+              g.ma.length ? `Modify All: ${g.ma.slice(0, 3).join(', ')}${g.ma.length > 3 ? ` +${g.ma.length - 3} more` : ''}` : '',
+            ].filter(Boolean).join(' | ')
+          })) }
+      ));
+    }
+
+    // Check 2: PS escalates Public Read OWD to write via Modify All Records
+    const pubReadModAll = psModifyAllPerms.filter(p => owdMap.get(p.SobjectType) === 'Read');
+    if (pubReadModAll.length > 0) {
+      const byObj2 = new Map<string, string[]>();
+      for (const p of pubReadModAll) {
+        if (!byObj2.has(p.SobjectType)) byObj2.set(p.SobjectType, []);
+        byObj2.get(p.SobjectType)!.push(p.Parent?.Name || p.Parent?.Label || 'Unknown PS');
+      }
+      findings.push(createFinding(CAT, 'high',
+        `${byObj2.size} Public Read OWD Object${byObj2.size > 1 ? 's Have' : ' Has'} Permission Sets Granting Modify All Records`,
+        'The OWD grants all internal users read access, but these permission sets escalate a subset of users to Modify All Records — unrestricted write access. This two-tier pattern is not visible from OWD or sharing rule reviews alone.',
+        'Review each permission set. If write access should be limited to specific roles, consider tightening the OWD to Private and using sharing rules to grant broad read access, keeping Modify All only for justified PS holders.',
+        { records: Array.from(byObj2.entries()).map(([obj, ps]) => ({
+            name: obj,
+            detail: `Modify All via: ${ps.slice(0, 3).join(', ')}${ps.length > 3 ? ` +${ps.length - 3} more` : ''}`
+          })) }
+      ));
+    }
+
+    // Check 3: PS grants View/Modify All on Public Read/Write OWD objects — redundant
+    const pubRWAll = [...psViewAllPerms, ...psModifyAllPerms].filter(p => owdMap.get(p.SobjectType) === 'ReadWrite');
+    if (pubRWAll.length > 0) {
+      const redundantObjs = new Set(pubRWAll.map(p => p.SobjectType));
+      findings.push(createFinding(CAT, 'low',
+        `View All / Modify All Records Grants on ${redundantObjs.size} Public Read/Write OWD Object${redundantObjs.size > 1 ? 's' : ''} — Redundant`,
+        'These objects already have Public Read/Write OWD — all internal users can read and edit records without any permission grant. View All / Modify All Records in permission sets adds governance noise without adding access control value.',
+        'Remove View All / Modify All Records from permission sets on these objects. This reduces permission set complexity without changing any user\'s access, and makes future OWD tightening easier to apply.',
+        { records: Array.from(redundantObjs).map(obj => ({ name: obj as string, detail: 'OWD is Public Read/Write — grant is redundant' })) }
+      ));
+    }
   }
 
   // 5% bypass threshold check

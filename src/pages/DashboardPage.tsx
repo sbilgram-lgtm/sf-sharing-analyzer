@@ -95,7 +95,7 @@ export const DashboardPage: React.FC = () => {
       const flowResult = assessFlowSharing(flowSharingData, apexSharingData);
       const teamsResult = assessRecordTeams(recordTeamsData, owdEntities);
       const groupsResult = assessGroupsQueues(groupsQueuesData, owdEntities);
-      const bypassResult = assessPermissionBypasses(bypassData);
+      const bypassResult = assessPermissionBypasses(bypassData, owdEntities);
       const implicitResult = assessImplicitSharing(implicitData);
       const externalResult = assessExternalAccess(externalData);
 
