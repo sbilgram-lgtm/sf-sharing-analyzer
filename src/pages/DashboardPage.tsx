@@ -96,7 +96,8 @@ export const DashboardPage: React.FC = () => {
       const teamsResult = assessRecordTeams(recordTeamsData, owdEntities);
       const groupsResult = assessGroupsQueues(groupsQueuesData, owdEntities);
       const bypassResult = assessPermissionBypasses(bypassData, owdEntities);
-      const implicitResult = assessImplicitSharing(implicitData);
+      const portalUserCount = (externalData?.portalUserCounts || []).reduce((sum: number, r: any) => sum + (r.cnt || r.expr0 || 0), 0);
+      const implicitResult = assessImplicitSharing(implicitData, owdEntities, portalUserCount);
       const externalResult = assessExternalAccess(externalData);
 
       const result = calculateOverallScore([

@@ -367,7 +367,23 @@ app.get('/api/assess/manual-sharing', requireAuth, async (req, res) => {
       Promise.all(objects.map(obj => makeCount(obj, `UserOrGroupId IN (SELECT Id FROM User WHERE IsActive = false)`)))
     ]);
 
-    res.json({ manualShares, fullAccessShares, roleShares, inactiveShares });
+    // Manual shares targeting active portal users
+    let portalManualShares = 0;
+    try {
+      const portalUsersRes = await safeQuery(conn, `SELECT Id FROM User WHERE UserType IN ('PowerPartner', 'PowerCustomerSuccess', 'CustomerSuccess', 'CspLitePortal') AND IsActive = true LIMIT 500`);
+      if (portalUsersRes.records && portalUsersRes.records.length > 0) {
+        const idList = portalUsersRes.records.map(u => `'${u.Id}'`).join(',');
+        const shareObjects = ['AccountShare', 'OpportunityShare', 'CaseShare', 'ContactShare', 'LeadShare'];
+        for (const shareObj of shareObjects) {
+          try {
+            const res = await safeQuery(conn, `SELECT COUNT() FROM ${shareObj} WHERE UserOrGroupId IN (${idList}) AND RowCause = 'Manual'`);
+            portalManualShares += res.totalSize || 0;
+          } catch(e) { /* object may not exist */ }
+        }
+      }
+    } catch(e) {}
+
+    res.json({ manualShares, fullAccessShares, roleShares, inactiveShares, portalManualShares });
   } catch (err) {
     console.error('Manual sharing assessment error:', err);
     res.status(500).json({ error: err.message });
@@ -723,7 +739,8 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
     const [guestProfileRes, externalEntitiesRes, sharingSetRes, guestSharingRulesRes,
            portalUserCountsRes, portalUsersWithBypassRes,
            portalOwnerRulesRes, portalCriteriaRulesRes,
-           knowledgeCategoriesRes] = await Promise.all([
+           knowledgeCategoriesRes,
+           portalRolesRes, partnerUsersByRoleRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -752,7 +769,9 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       ).catch(() => ({ records: [] })),
       safeQuery(conn,
         "SELECT Id, Name, ObjectType FROM DataCategoryGroup WHERE IsActive = true LIMIT 100"
-      ).catch(() => ({ records: [] }))
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn, "SELECT Id, Name, ParentRoleId, PortalType FROM UserRole WHERE PortalType != 'None' LIMIT 1000").catch(() => ({ records: [] })),
+      safeQuery(conn, "SELECT UserRoleId, COUNT(Id) cnt FROM User WHERE UserType IN ('PowerPartner', 'PowerCustomerSuccess') AND IsActive = true AND UserRoleId != null GROUP BY UserRoleId LIMIT 500").catch(() => ({ records: [] }))
     ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
@@ -765,7 +784,9 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
         ...(portalOwnerRulesRes.records || []),
         ...(portalCriteriaRulesRes.records || [])
       ],
-      knowledgeCategories: knowledgeCategoriesRes.records || []
+      knowledgeCategories: knowledgeCategoriesRes.records || [],
+      portalRoles: portalRolesRes.records || [],
+      partnerUsersByRole: partnerUsersByRoleRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);

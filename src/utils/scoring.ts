@@ -609,6 +609,7 @@ export function assessManualSharing(
     fullAccessShares?: { object: string; count: number }[];
     roleShares?: { object: string; count: number }[];
     inactiveShares?: { object: string; count: number }[];
+    portalManualShares?: number;
   },
   owdEntities?: any[],
   sharingRuleData?: { ownerRules: any[]; criteriaRules: any[] }
@@ -718,6 +719,17 @@ export function assessManualSharing(
       'Manual share records remain in Salesforce after a user is deactivated. While inactive users cannot log in, these shares consume sharing calculation resources and create a risk if the user account is ever reactivated — access is immediately restored with no review.',
       'Run a data cleanup to delete manual share records where the UserOrGroupId belongs to an inactive user. Implement a deactivation checklist or automation to remove manual shares as part of the offboarding process.',
       { records: inactiveShareObjects.map(s => ({ name: s.object, detail: `${s.count.toLocaleString()} share${s.count > 1 ? 's' : ''} to inactive users` })) }
+    ));
+  }
+
+  // Manual shares to active portal users
+  const portalManualShares: number = data.portalManualShares || 0;
+  if (portalManualShares > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${portalManualShares.toLocaleString()} Manual Share${portalManualShares > 1 ? 's' : ''} Targeting External Portal Users Detected`,
+      'Manual share records are targeting active external portal users. Manual sharing to portal users bypasses the structured community sharing model and creates hard-to-audit access grants that are not visible in standard Experience Cloud sharing reports.',
+      'Review manual shares on portal users. Replace with structured sharing mechanisms (Sharing Sets, sharing rules, or portal role hierarchy) where the access pattern is repeatable. Remove shares that are no longer required.',
+      { count: portalManualShares }
     ));
   }
 
@@ -1524,7 +1536,7 @@ export function assessPermissionBypasses(data: {
 }
 
 // ── Implicit Sharing ──────────────────────────────────────────────────────────
-export function assessImplicitSharing(data: { entities: any[] }): CategoryResult & { stats: any } {
+export function assessImplicitSharing(data: { entities: any[] }, owdEntities?: any[], portalUserCount?: number): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'Implicit Sharing';
   const entities: any[] = data.entities || [];
@@ -1567,6 +1579,19 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
     ));
   }
 
+  // External users + implicit Account access via child records
+  if (owdEntities && owdEntities.length > 0 && portalUserCount && portalUserCount > 0) {
+    const accountEntity = owdEntities.find((e: any) => e.QualifiedApiName === 'Account');
+    if (accountEntity && accountEntity.ExternalSharingModel === 'Private') {
+      findings.push(createFinding(CAT, 'medium',
+        `External Users Have Implicit Read on Parent Accounts via Child Record Access`,
+        `Account external OWD is Private, but ${portalUserCount} active portal user(s) who have access to related Contacts, Cases, or Opportunities automatically receive implicit read access to the parent Account record — regardless of the Account OWD.`,
+        'Document this implicit external sharing chain. Audit which Accounts are exposed via portal user access to child records. Confirm this implicit grant is intentional for your portal use case.',
+        { count: portalUserCount }
+      ));
+    }
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -1576,7 +1601,7 @@ export function assessImplicitSharing(data: { entities: any[] }): CategoryResult
 }
 
 // ── External & Guest Access ───────────────────────────────────────────────────
-export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[]; portalTargetedRules?: any[]; knowledgeCategories?: any[] }): CategoryResult & { stats: any } {
+export function assessExternalAccess(data: { guestProfiles: any[]; externalEntities: any[]; sharingSets?: any[]; guestSharingRules?: any[]; portalTargetedRules?: any[]; knowledgeCategories?: any[]; portalRoles?: any[]; partnerUsersByRole?: any[] }): CategoryResult & { stats: any } {
   const findings: SharingFinding[] = [];
   const CAT = 'External & Guest Access';
   const guestProfiles: any[] = data.guestProfiles || [];
@@ -1695,6 +1720,49 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Create Sharing Sets for each HVPU profile and object they need to access. Map the Sharing Set access field to the appropriate relationship field (e.g., AccountId or ContactId) to grant access to records the user is related to.',
       { count: hvpuCount }
     ));
+  }
+
+  // Partner role hierarchy depth — upward visibility across tiers
+  const portalRoles: any[] = data.portalRoles || [];
+  if (portalRoles.length > 0) {
+    const roleMap = new Map<string, any>(portalRoles.map((r: any) => [r.Id, r]));
+    let maxDepth = 0;
+    const getPortalDepth = (roleId: string, visited = new Set<string>()): number => {
+      if (visited.has(roleId)) return 0;
+      visited.add(roleId);
+      const role = roleMap.get(roleId);
+      if (!role || !role.ParentRoleId) return 1;
+      return 1 + getPortalDepth(role.ParentRoleId, visited);
+    };
+    portalRoles.forEach((r: any) => {
+      const d = getPortalDepth(r.Id);
+      if (d > maxDepth) maxDepth = d;
+    });
+    if (maxDepth >= 3) {
+      findings.push(createFinding(CAT, 'medium',
+        `Partner Role Hierarchy Has ${maxDepth} Levels — Upward Visibility Across Partner Tiers`,
+        `The portal role hierarchy is ${maxDepth} levels deep. Partner managers automatically see records owned by all partner users below them in the hierarchy as access rolls up through each level, mirroring the same escalation risk as the internal role hierarchy.`,
+        'Review the partner role hierarchy depth. Confirm that visibility rolling up to partner manager roles is intentional. Document which records each role tier can access and ensure portal sharing rules are scoped accordingly.',
+        { count: maxDepth }
+      ));
+    }
+  }
+
+  // Upper-tier partner users — broad peer record visibility
+  const partnerUsersByRole: any[] = data.partnerUsersByRole || [];
+  if (partnerUsersByRole.length > 0 && portalRoles.length > 0) {
+    const topPortalRoleIds = new Set<string>(portalRoles.filter((r: any) => !r.ParentRoleId).map((r: any) => r.Id));
+    const topRoleUserCount = partnerUsersByRole
+      .filter((r: any) => topPortalRoleIds.has(r.UserRoleId))
+      .reduce((sum: number, r: any) => sum + (parseInt(r.cnt) || r.expr0 || 0), 0);
+    if (topRoleUserCount >= 3) {
+      findings.push(createFinding(CAT, 'medium',
+        `${topRoleUserCount} Active Partner Users in Upper-Tier Portal Roles — Broad Peer Record Visibility`,
+        `${topRoleUserCount} active partner users are assigned to top-level portal roles. In a partner role hierarchy, upper-tier users may have visibility into records owned by all partner users below them, depending on the portal hierarchy settings and sharing rules in place.`,
+        'Audit which records upper-tier partner users can access. Confirm that top-level portal role assignments are intentional and that partner managers should have this breadth of visibility. Review portal role hierarchy settings and restrict where appropriate.',
+        { count: topRoleUserCount }
+      ));
+    }
   }
 
   // Knowledge data categories — separate visibility model in place

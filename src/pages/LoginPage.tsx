@@ -67,6 +67,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Manual Shares Target Roles or Role Hierarchies — Potentially Broad Exposure', severity: 'medium', rationale: 'One share can expose the record to an entire role branch, including future hires.' },
     { title: 'Manual Shares Exist on Public Read/Write OWD Objects', severity: 'medium', rationale: 'Redundant — all users already have access; these shares add recalculation overhead for nothing.' },
     { title: 'Manual Shares Are Granted to Inactive Users', severity: 'medium', rationale: 'Access is instantly restored if a deactivated user is ever reactivated, with no review required.' },
+    { title: 'Manual Shares Targeting External Portal Users Detected', severity: 'medium', rationale: 'Ad-hoc portal user shares bypass the structured community sharing model and accumulate without automated review.' },
   ],
   'Apex Sharing': [
     { title: 'Many Apex Classes Run Without Sharing Enforcement (20+)', severity: 'high', rationale: 'At this scale, bypassing record-level security is systemic, not exceptional.' },
@@ -123,6 +124,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium', rationale: 'Account access automatically exposes all related Contacts — Account-level sharing changes ripple to Contacts.' },
     { title: 'Case Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium', rationale: 'Account access automatically exposes all related Cases — Account sharing changes cascade to Cases.' },
     { title: 'Account-Opportunity Implicit Sharing Is Active', severity: 'low', rationale: 'Owning an Opportunity grants implicit read access to the parent Account — by design but must be accounted for.' },
+    { title: 'External Users Have Implicit Read on Parent Accounts via Child Record Access', severity: 'medium', rationale: 'Portal users accessing a Contact, Case, or Opportunity automatically get implicit Account read — even when Account external OWD is Private.' },
   ],
   'External & Guest Access': [
     { title: 'Objects Allow External Users to Create/Edit Records', severity: 'critical', rationale: 'Guest and portal users can create or edit records — almost never intentional and a critical data exposure risk.' },
@@ -133,6 +135,8 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Sharing Rules Target External User Portal Roles or Role Hierarchies', severity: 'medium', rationale: 'A single rule exposes records to every external user in that portal role branch, expanding as users join.' },
     { title: 'Customer Community Plus Users Active — External Users Participate in Role Hierarchy', severity: 'low', rationale: 'CC+ users participate in the Experience Cloud role hierarchy — access expands as users join the same portal role branch.' },
     { title: 'Knowledge Data Category Groups Active — Separate Visibility Model in Place', severity: 'low', rationale: 'Knowledge article visibility is controlled by data categories independently of the standard sharing model — must be audited separately.' },
+    { title: 'Partner Role Hierarchy Has 3+ Levels — Upward Visibility Across Partner Tiers', severity: 'medium', rationale: 'Partner managers automatically see all subordinate partner records as access rolls up each hierarchy level.' },
+    { title: 'Active Partner Users in Upper-Tier Portal Roles — Broad Peer Record Visibility', severity: 'medium', rationale: 'Users in top portal roles may see records from all partner users below them — confirm this matches the intended partner data model.' },
   ],
   'Flow & Automation Sharing': [
     { title: 'Screen Flows Set to System Context Without Sharing', severity: 'high', rationale: 'Every user who runs this flow bypasses record-level security — the default is user context for a reason.' },
