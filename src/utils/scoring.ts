@@ -1789,6 +1789,79 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
   };
 }
 
+// ── User Sharing ──────────────────────────────────────────────────────────────
+export function assessUserSharing(data: {
+  userEntity: any;
+  portalUserVisibilityEnabled: boolean | null;
+  userOwnerRules: any[];
+  userCriteriaRules: any[];
+}): CategoryResult {
+  const findings: SharingFinding[] = [];
+  const CAT = 'User Sharing';
+  const entity = data.userEntity;
+
+  if (entity) {
+    const internalModel: string = entity.InternalSharingModel || 'Private';
+    if (internalModel === 'ReadWrite') {
+      findings.push(createFinding(CAT, 'high',
+        'User Object OWD Is Public Read/Write — All Users Can Edit Each Other\'s Profiles',
+        'Any internal user can edit any other user\'s record. This exposes sensitive profile fields — manager, role, profile, email — to modification by all users.',
+        'Set the User OWD to Private or Public Read Only. Grant edit access only via User Sharing Rules scoped to specific administrative groups.'
+      ));
+    } else if (internalModel === 'Read') {
+      findings.push(createFinding(CAT, 'medium',
+        'User Object OWD Is Public Read Only — All Users Can View Each Other\'s Profiles',
+        'Every internal user has read access to every other user\'s record, including manager, role, profile, and contact information. This is often intentional but may be broader than necessary.',
+        'Consider setting User OWD to Private and using User Sharing Rules to grant controlled read visibility to appropriate groups or roles.'
+      ));
+    }
+
+    const externalModel: string = entity.ExternalSharingModel || 'Private';
+    if (externalModel === 'ReadWrite') {
+      findings.push(createFinding(CAT, 'high',
+        'User Object External Sharing Model Is Public Read/Write — Portal Users Can Edit Internal User Records',
+        'Portal and community users can view and edit internal user records. This almost always unintentional and exposes sensitive employee information to external parties.',
+        'Set the User external sharing model to Private immediately. Use sharing rules to grant targeted read-only visibility to external users only where a business need exists.'
+      ));
+    } else if (externalModel === 'Read') {
+      findings.push(createFinding(CAT, 'medium',
+        'User Object External Sharing Model Is Not Private — Portal Users Can View Internal User Records',
+        'External users (portal, community) have read access to internal user records, including employee names, emails, roles, and profile information.',
+        'Verify that external visibility into internal user records is intentional. Set to Private if not; grant visibility via sharing rules scoped to specific authenticated portal users.'
+      ));
+    }
+  }
+
+  if (data.portalUserVisibilityEnabled === true) {
+    findings.push(createFinding(CAT, 'medium',
+      'Portal User Visibility Is Enabled — All Community Users Can See Each Other\'s User Records',
+      'All portal and community users across the org can view each other\'s user records regardless of experience site membership. This may expose user profiles across unrelated communities.',
+      'Disable Portal User Visibility unless cross-community user discovery is a deliberate product feature. Use sharing rules or sharing sets to grant targeted visibility between specific community groups.'
+    ));
+  }
+
+  const totalUserRules = (data.userOwnerRules?.length || 0) + (data.userCriteriaRules?.length || 0);
+  if (totalUserRules > 0) {
+    findings.push(createFinding(CAT, 'low',
+      `${totalUserRules} User Sharing Rule${totalUserRules > 1 ? 's Configured' : ' Configured'} — Audit for Appropriate Scope`,
+      'User Sharing Rules grant one group visibility into another group\'s user records. Rules that share to All Internal Users effectively override a Private User OWD.',
+      'Review each rule\'s "Shared To" group and access level. Remove rules that are overly broad or duplicate what the OWD already provides.',
+      {
+        records: [
+          ...(data.userOwnerRules || []).map((r: any) => ({ name: r.DeveloperName, detail: `Owner Rule → ${r.SharedToType}` })),
+          ...(data.userCriteriaRules || []).map((r: any) => ({ name: r.DeveloperName, detail: `Criteria Rule → ${r.SharedToType}` }))
+        ]
+      }
+    ));
+  }
+
+  return {
+    category: CAT,
+    score: calculateCategoryScore(findings),
+    items: findings
+  };
+}
+
 // ── Overall Score ─────────────────────────────────────────────────────────────
 export function calculateOverallScore(categoryResults: CategoryResult[]): AssessmentResult {
   const validScores = categoryResults.map(c => c.score).filter(s => s !== null && s !== undefined);

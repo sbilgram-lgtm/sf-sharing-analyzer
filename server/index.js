@@ -794,6 +794,42 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
   }
 });
 
+// ── User Sharing ──────────────────────────────────────────────────────────────
+app.get('/api/assess/user-sharing', requireAuth, async (req, res) => {
+  const conn = getConnection(req);
+  try {
+    const [userEntityRes, orgRes, ownerRulesRes, criteriaRulesRes] = await Promise.all([
+      safeToolingQuery(conn,
+        "SELECT QualifiedApiName, Label, InternalSharingModel, ExternalSharingModel " +
+        "FROM EntityDefinition WHERE QualifiedApiName = 'User' LIMIT 1"
+      ),
+      safeQuery(conn,
+        "SELECT PortalUserShareableToPortalUsers FROM Organization LIMIT 1"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType " +
+        "FROM OwnerSharingRule LIMIT 2000"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, DeveloperName, EntityDefinition.QualifiedApiName, SharedToType " +
+        "FROM CriteriaBasedSharingRule LIMIT 2000"
+      ).catch(() => ({ records: [] }))
+    ]);
+    const org = (orgRes.records || [])[0] || null;
+    const allOwnerRules = ownerRulesRes.records || [];
+    const allCriteriaRules = criteriaRulesRes.records || [];
+    res.json({
+      userEntity: (userEntityRes.records || [])[0] || null,
+      portalUserVisibilityEnabled: org?.PortalUserShareableToPortalUsers ?? null,
+      userOwnerRules: allOwnerRules.filter(r => r.EntityDefinition?.QualifiedApiName === 'User'),
+      userCriteriaRules: allCriteriaRules.filter(r => r.EntityDefinition?.QualifiedApiName === 'User')
+    });
+  } catch (err) {
+    console.error('User sharing assessment error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Flow & Automation Sharing ─────────────────────────────────────────────────
 app.get('/api/assess/flow-sharing', requireAuth, async (req, res) => {
   const conn = getConnection(req);

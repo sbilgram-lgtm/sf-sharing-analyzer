@@ -6,13 +6,14 @@ import {
   getAuthStatus, getOwdData, getRoleHierarchyData, getTerritoriesData,
   getSharingRulesData, getManualSharingData, getApexSharingData,
   getRecordTeamsData, getGroupsQueuesData, getPermissionBypassesData,
-  getImplicitSharingData, getExternalAccessData, getFlowSharingData
+  getImplicitSharingData, getExternalAccessData, getFlowSharingData,
+  getUserSharingData
 } from '../services/api';
 import {
   assessOwd, assessRoleHierarchy, assessTerritories, assessSharingRules,
   assessManualSharing, assessApexSharing, assessFlowSharing, assessRecordTeams,
   assessGroupsQueues, assessPermissionBypasses, assessImplicitSharing,
-  assessExternalAccess, calculateOverallScore
+  assessExternalAccess, assessUserSharing, calculateOverallScore
 } from '../utils/scoring';
 import { AssessmentResult } from '../types/assessment';
 import { generatePDFReport } from '../utils/reportGenerator';
@@ -84,6 +85,9 @@ export const DashboardPage: React.FC = () => {
       setProgress('Checking external & guest access...');
       const externalData = await getExternalAccessData();
 
+      setProgress('Analyzing user sharing settings...');
+      const userSharingData = await getUserSharingData();
+
       setProgress('Calculating scores...');
       const owdEntities = owdData?.entities || [];
       const owdResult = assessOwd(owdData);
@@ -99,11 +103,12 @@ export const DashboardPage: React.FC = () => {
       const portalUserCount = (externalData?.portalUserCounts || []).reduce((sum: number, r: any) => sum + (r.cnt || r.expr0 || 0), 0);
       const implicitResult = assessImplicitSharing(implicitData, owdEntities, portalUserCount);
       const externalResult = assessExternalAccess(externalData);
+      const userSharingResult = assessUserSharing(userSharingData);
 
       const result = calculateOverallScore([
         owdResult, roleResult, territoryResult, sharingRulesResult,
         manualResult, apexResult, flowResult, teamsResult, groupsResult,
-        bypassResult, implicitResult, externalResult
+        bypassResult, implicitResult, externalResult, userSharingResult
       ]);
 
       const authStatus = await getAuthStatus();

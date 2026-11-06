@@ -146,6 +146,14 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Platform Event-Triggered Flows — Always System Context', severity: 'medium', rationale: 'These flows run without a user session because platform events publish asynchronously — DML and SOQL are unconstrained.' },
     { title: 'Active Flows Rely on Platform Default Run Mode', severity: 'low', rationale: 'Default behavior varies by flow type and can change across releases — explicit RunInMode declarations are safer.' },
   ],
+  'User Sharing': [
+    { title: 'User Object OWD Is Public Read/Write — All Users Can Edit Each Other\'s Profiles', severity: 'high', rationale: 'Public Read/Write OWD on the User object lets any user edit any other user\'s record — almost never the intended configuration.' },
+    { title: 'User Object External Sharing Model Is Public Read/Write — Portal Users Can Edit Internal User Records', severity: 'high', rationale: 'External users can create and modify internal user records — an almost always unintentional configuration that exposes employee data to customers or partners.' },
+    { title: 'User Object OWD Is Public Read Only — All Users Can View Each Other\'s Profiles', severity: 'medium', rationale: 'Every internal user has read access to all other users\' records, which may be broader than necessary for your org\'s data model.' },
+    { title: 'User Object External Sharing Model Is Not Private — Portal Users Can View Internal User Records', severity: 'medium', rationale: 'Portal and community users can read internal user records including employee names, emails, roles, and profile information.' },
+    { title: 'Portal User Visibility Is Enabled — All Community Users Can See Each Other\'s User Records', severity: 'medium', rationale: 'All portal users across all experience sites can see each other\'s profiles regardless of community membership — may expose users across unrelated communities.' },
+    { title: 'User Sharing Rules Configured — Audit for Appropriate Scope', severity: 'low', rationale: 'Overly broad User Sharing Rules (e.g., shared to All Internal Users) can effectively nullify a Private User OWD.' },
+  ],
 };
 
 const TOTAL_CHECKS = Object.values(CATEGORY_CHECKS).reduce((sum, arr) => sum + arr.length, 0);
@@ -170,6 +178,7 @@ const CATEGORIES = [
   { icon: '🔑', name: 'Permission Bypasses',          group: 'Access Control' },
   { icon: '🔗', name: 'Implicit Sharing',             group: 'Visibility' },
   { icon: '🌐', name: 'External & Guest Access',      group: 'Visibility' },
+  { icon: '👤', name: 'User Sharing',                 group: 'Visibility' },
 ];
 
 const labelStyle: React.CSSProperties = {

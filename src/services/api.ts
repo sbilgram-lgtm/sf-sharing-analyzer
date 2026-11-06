@@ -59,3 +59,7 @@ export function getExternalAccessData() {
 export function getFlowSharingData() {
   return apiFetch('/api/assess/flow-sharing');
 }
+
+export function getUserSharingData() {
+  return apiFetch('/api/assess/user-sharing');
+}
