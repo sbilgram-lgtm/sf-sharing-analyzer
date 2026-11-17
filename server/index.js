@@ -568,7 +568,10 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       uapCountRes,
       unassignedVadProfilesRes, unassignedMadProfilesRes,
       unassignedVadPsRes, unassignedMadPsRes,
-      psViewAllRes, psModifyAllRes
+      psViewAllRes, psModifyAllRes,
+      guestProfilesAllDataRes, guestProfilesApiEnabledRes,
+      guestProfilesManageExtUsersRes, portalProfilesApiEnabledRes,
+      apexAuraEnabledRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, UserType, LastLoginDate, Profile.Name FROM User " +
@@ -644,6 +647,28 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       safeToolingQuery(conn,
         "SELECT SobjectType, Parent.Name, Parent.Label FROM ObjectPermissions " +
         "WHERE PermissionsModifyAllRecords = true AND Parent.IsOwnedByProfile = false LIMIT 1000"
+      ).catch(() => ({ records: [] })),
+      // Guest profile over-privilege checks
+      safeQuery(conn,
+        "SELECT Id, Name, PermissionsViewAllData, PermissionsModifyAllData FROM Profile " +
+        "WHERE UserType = 'Guest' AND (PermissionsViewAllData = true OR PermissionsModifyAllData = true) LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, PermissionsApiEnabled FROM Profile " +
+        "WHERE UserType = 'Guest' AND PermissionsApiEnabled = true LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, PermissionsManageExternalUsers FROM Profile " +
+        "WHERE UserType = 'Guest' AND PermissionsManageExternalUsers = true LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, PermissionsApiEnabled, UserType FROM Profile " +
+        "WHERE UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly') " +
+        "AND PermissionsApiEnabled = true LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT Id, Name, ApiVersion, Body FROM ApexClass " +
+        "WHERE NamespacePrefix = null AND Body LIKE '%@AuraEnabled%' LIMIT 500"
       ).catch(() => ({ records: [] }))
     ]);
 
@@ -706,7 +731,12 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       unassignedVadPermSets: unassignedVadPsRes.records || [],
       unassignedMadPermSets: unassignedMadPsRes.records || [],
       psViewAllObjectPerms: psViewAllRes.records || [],
-      psModifyAllObjectPerms: psModifyAllRes.records || []
+      psModifyAllObjectPerms: psModifyAllRes.records || [],
+      guestProfilesAllData: guestProfilesAllDataRes.records || [],
+      guestProfilesApiEnabled: guestProfilesApiEnabledRes.records || [],
+      guestProfilesManageExtUsers: guestProfilesManageExtUsersRes.records || [],
+      portalProfilesApiEnabled: portalProfilesApiEnabledRes.records || [],
+      apexAuraEnabledClasses: apexAuraEnabledRes.records || []
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);
@@ -740,7 +770,10 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
            portalUserCountsRes, portalUsersWithBypassRes,
            portalOwnerRulesRes, portalCriteriaRulesRes,
            knowledgeCategoriesRes,
-           portalRolesRes, partnerUsersByRoleRes] = await Promise.all([
+           portalRolesRes, partnerUsersByRoleRes,
+           guestWritePiiObjectsRes, guestReadSensitiveObjectsRes,
+           guestApiSitesRes, contentDeliveriesNoExpiryRes,
+           guestProfilesReportAccessRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -771,7 +804,28 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
         "SELECT Id, Name, ObjectType FROM DataCategoryGroup WHERE IsActive = true LIMIT 100"
       ).catch(() => ({ records: [] })),
       safeQuery(conn, "SELECT Id, Name, ParentRoleId, PortalType FROM UserRole WHERE PortalType != 'None' LIMIT 1000").catch(() => ({ records: [] })),
-      safeQuery(conn, "SELECT UserRoleId, COUNT(Id) cnt FROM User WHERE UserType IN ('PowerPartner', 'PowerCustomerSuccess') AND IsActive = true AND UserRoleId != null GROUP BY UserRoleId LIMIT 500").catch(() => ({ records: [] }))
+      safeQuery(conn, "SELECT UserRoleId, COUNT(Id) cnt FROM User WHERE UserType IN ('PowerPartner', 'PowerCustomerSuccess') AND IsActive = true AND UserRoleId != null GROUP BY UserRoleId LIMIT 500").catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT SobjectType, PermissionsCreate, PermissionsEdit, PermissionsDelete, Parent.Name " +
+        "FROM ObjectPermissions WHERE Parent.IsOwnedByProfile = true AND Parent.Profile.UserType = 'Guest' " +
+        "AND SobjectType IN ('Account', 'Contact', 'Lead') " +
+        "AND (PermissionsCreate = true OR PermissionsEdit = true OR PermissionsDelete = true) LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeToolingQuery(conn,
+        "SELECT SobjectType, PermissionsRead, Parent.Name FROM ObjectPermissions " +
+        "WHERE Parent.IsOwnedByProfile = true AND Parent.Profile.UserType = 'Guest' " +
+        "AND SobjectType IN ('Case', 'Opportunity', 'Contract', 'Order') AND PermissionsRead = true LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name FROM Site WHERE OptionsAllowGuestSupportApi = true AND Status = 'Active' LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, ContentDocumentId FROM ContentDistribution WHERE ExpiryDate = null AND IsDeleted = false LIMIT 100"
+      ).catch(() => ({ records: [] })),
+      safeQuery(conn,
+        "SELECT Id, Name, PermissionsRunReports, PermissionsExportReport FROM Profile " +
+        "WHERE UserType = 'Guest' AND (PermissionsRunReports = true OR PermissionsExportReport = true) LIMIT 50"
+      ).catch(() => ({ records: [] }))
     ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
@@ -786,7 +840,12 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       ],
       knowledgeCategories: knowledgeCategoriesRes.records || [],
       portalRoles: portalRolesRes.records || [],
-      partnerUsersByRole: partnerUsersByRoleRes.records || []
+      partnerUsersByRole: partnerUsersByRoleRes.records || [],
+      guestWritePiiObjects: guestWritePiiObjectsRes.records || [],
+      guestReadSensitiveObjects: guestReadSensitiveObjectsRes.records || [],
+      guestApiSites: guestApiSitesRes.records || [],
+      contentDeliveriesNoExpiry: contentDeliveriesNoExpiryRes.records || [],
+      guestProfilesReportAccess: guestProfilesReportAccessRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);

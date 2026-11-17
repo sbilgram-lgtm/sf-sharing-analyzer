@@ -1522,6 +1522,68 @@ export function assessPermissionBypasses(data: {
     ));
   }
 
+  // ── Guest profile bypass checks ──────────────────────────────────────────────
+
+  const guestProfilesAllData: any[] = (data as any).guestProfilesAllData || [];
+  if (guestProfilesAllData.length > 0) {
+    const viewAll = guestProfilesAllData.filter((p: any) => p.PermissionsViewAllData);
+    const modAll  = guestProfilesAllData.filter((p: any) => p.PermissionsModifyAllData);
+    const label = [viewAll.length > 0 ? '"View All Data"' : '', modAll.length > 0 ? '"Modify All Data"' : ''].filter(Boolean).join(' and ');
+    findings.push(createFinding(CAT, 'critical',
+      `Guest User Profile Has ${label} Permission`,
+      'A guest profile with View All Data or Modify All Data bypasses all object-level and record-level security. Any unauthenticated visitor to your Experience Cloud site can read or write every record in the org.',
+      'Remove View All Data and Modify All Data from all guest profiles immediately. Use explicit object permissions and OWD to control what guests can access.',
+      { records: guestProfilesAllData.map((p: any) => ({ name: p.Name, detail: [p.PermissionsViewAllData && 'ViewAllData', p.PermissionsModifyAllData && 'ModifyAllData'].filter(Boolean).join(', ') })) }
+    ));
+  }
+
+  const guestProfilesApiEnabled: any[] = (data as any).guestProfilesApiEnabled || [];
+  if (guestProfilesApiEnabled.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${guestProfilesApiEnabled.length} Guest User Profile${guestProfilesApiEnabled.length !== 1 ? 's' : ''} With "API Enabled" Permission`,
+      'Guest profiles with API Enabled allow unauthenticated access to Salesforce REST and SOAP APIs — the sharing model is fully bypassed for any object the guest profile can access.',
+      'Remove API Enabled from all guest user profiles. Use authenticated APIs and Named Credentials for integrations that require API access.',
+      { records: guestProfilesApiEnabled.map((p: any) => ({ name: p.Name })) }
+    ));
+  }
+
+  const guestProfilesManageExtUsers: any[] = (data as any).guestProfilesManageExtUsers || [];
+  if (guestProfilesManageExtUsers.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${guestProfilesManageExtUsers.length} Guest User Profile${guestProfilesManageExtUsers.length !== 1 ? 's' : ''} With "Manage External Users" Permission`,
+      'Guest profiles with Manage External Users allow unauthenticated visitors to create, deactivate, or modify Experience Cloud user accounts — an effective privilege escalation path.',
+      'Remove Manage External Users from all guest profiles. This permission should only be granted to authenticated admin-level internal users.',
+      { records: guestProfilesManageExtUsers.map((p: any) => ({ name: p.Name })) }
+    ));
+  }
+
+  const portalProfilesApiEnabled: any[] = (data as any).portalProfilesApiEnabled || [];
+  if (portalProfilesApiEnabled.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${portalProfilesApiEnabled.length} Portal/Community User Profile${portalProfilesApiEnabled.length !== 1 ? 's' : ''} With "API Enabled" Permission`,
+      'Community and portal user profiles with API Enabled allow authenticated external users to access Salesforce APIs directly, bypassing UI-level controls and potentially extracting or modifying data programmatically.',
+      'Review whether portal and community users require direct API access. If not, remove API Enabled from all community/partner profiles. If needed for a specific integration, use a dedicated integration user.',
+      { records: portalProfilesApiEnabled.map((p: any) => ({ name: p.Name, detail: `UserType: ${p.UserType}` })) }
+    ));
+  }
+
+  // Apex @AuraEnabled without sharing — sharing bypass via code
+  const apexAuraEnabledClasses: any[] = (data as any).apexAuraEnabledClasses || [];
+  function getOuterClassSharingKw(body: string): string {
+    const match = body.match(/\b(?:public|global|private)\s+(?:(with\s+sharing|without\s+sharing|inherited\s+sharing)\s+)?(?:virtual\s+|abstract\s+)?class\b/i);
+    if (!match || !match[1]) return 'none';
+    return match[1].toLowerCase().replace(/\s+/g, ' ');
+  }
+  const withoutSharingAura = apexAuraEnabledClasses.filter((c: any) => c.Body && getOuterClassSharingKw(c.Body) === 'without sharing');
+  if (withoutSharingAura.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${withoutSharingAura.length} Apex Class${withoutSharingAura.length !== 1 ? 'es' : ''} With @AuraEnabled Methods Declared "without sharing"`,
+      'Apex classes explicitly declared "without sharing" ignore record-level security entirely. @AuraEnabled methods on these classes can return records that the calling user — including a guest user on an Experience Cloud site — should not have access to.',
+      'Add "with sharing" to these Apex classes or switch to "inherited sharing". Audit each @AuraEnabled method to confirm it only returns data the user is authorised to see.',
+      { records: withoutSharingAura.map((c: any) => ({ name: c.Name, detail: 'without sharing — @AuraEnabled methods bypass record-level security' })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -1774,6 +1836,81 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Salesforce Knowledge uses data category groups to control article visibility, independently of the standard sharing model. Users and portal/community users see only articles in categories visible to their profile or permission set. This visibility is not reflected in standard sharing checks and must be audited separately.',
       'Audit data category visibility assignments for all profiles and permission sets. Confirm guest users (unauthenticated) cannot access categories containing sensitive content. Verify that portal user profiles have the correct category visibility for their intended audience.',
       { records: knowledgeCatGroups.map((c: any) => ({ name: c.Name, detail: 'Knowledge data category group' })) }
+    ));
+  }
+
+  // ── Guest profile object permission checks ────────────────────────────────────
+
+  const guestWritePiiObjects: any[] = (data as any).guestWritePiiObjects || [];
+  if (guestWritePiiObjects.length > 0) {
+    const byObject: Record<string, string[]> = {};
+    guestWritePiiObjects.forEach((r: any) => {
+      if (!byObject[r.SobjectType]) byObject[r.SobjectType] = [];
+      const perms = [r.PermissionsCreate && 'Create', r.PermissionsEdit && 'Edit', r.PermissionsDelete && 'Delete'].filter(Boolean).join('/');
+      byObject[r.SobjectType].push(`${r.Parent?.Name || 'Guest Profile'} (${perms})`);
+    });
+    const objectList = Object.keys(byObject).join(', ');
+    findings.push(createFinding(CAT, 'high',
+      `Guest User Profile Has Write Access on PII Objects (${objectList})`,
+      'Guest profiles with Create, Edit, or Delete on Account, Contact, or Lead allow unauthenticated visitors to modify or delete core CRM data. This is a significant data integrity and privacy risk.',
+      'Remove Create, Edit, and Delete permissions on Account, Contact, and Lead from all guest profiles. If guests need to submit inquiries, use a dedicated Web-to-Lead or Web-to-Case form with proper duplicate handling.',
+      { records: guestWritePiiObjects.map((r: any) => ({ name: r.SobjectType, detail: `${r.Parent?.Name || 'Guest Profile'} — ${[r.PermissionsCreate && 'Create', r.PermissionsEdit && 'Edit', r.PermissionsDelete && 'Delete'].filter(Boolean).join('/')}` })) }
+    ));
+  }
+
+  const guestReadSensitiveObjects: any[] = (data as any).guestReadSensitiveObjects || [];
+  if (guestReadSensitiveObjects.length > 0) {
+    const objectList = Array.from(new Set(guestReadSensitiveObjects.map((r: any) => r.SobjectType))).join(', ');
+    findings.push(createFinding(CAT, 'high',
+      `Guest User Profile Has Read Access on Sensitive Objects (${objectList})`,
+      'Guest profiles with Read access on Case, Opportunity, Contract, or Order expose sensitive business data to unauthenticated visitors. Without Private OWD, this may expose all records on those objects.',
+      'Remove Read permissions on Case, Opportunity, Contract, and Order from guest profiles. If the site needs to surface some of this data, enforce record-level sharing with Sharing Sets and ensure OWD for these objects is Private for external users.',
+      { records: guestReadSensitiveObjects.map((r: any) => ({ name: r.SobjectType, detail: r.Parent?.Name || 'Guest Profile' })) }
+    ));
+  }
+
+  const guestProfilesReportAccess: any[] = (data as any).guestProfilesReportAccess || [];
+  if (guestProfilesReportAccess.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${guestProfilesReportAccess.length} Guest User Profile${guestProfilesReportAccess.length !== 1 ? 's' : ''} With Report Access`,
+      'Guest profiles with Run Reports or Export Report allow unauthenticated users to execute and export data. Reports aggregate across all accessible objects, making this a data exfiltration risk even when individual object permissions appear restricted.',
+      'Remove PermissionsRunReports and PermissionsExportReport from all guest user profiles in Setup → Guest User Profile → System Permissions.',
+      { records: guestProfilesReportAccess.map((p: any) => ({ name: p.Name, detail: [p.PermissionsRunReports && 'Run Reports', p.PermissionsExportReport && 'Export Report'].filter(Boolean).join(', ') })) }
+    ));
+  }
+
+  const guestApiSites: any[] = (data as any).guestApiSites || [];
+  if (guestApiSites.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${guestApiSites.length} Active Site${guestApiSites.length !== 1 ? 's' : ''} With Guest User API Access Enabled`,
+      'Sites with Guest User API Access enabled allow unauthenticated REST API calls. This extends the attack surface beyond the browser UI and enables automated data scraping without credentials.',
+      'Disable Guest User API Access in Setup → Sites → [Site Name] → Edit. Only enable this for specific integration use cases where the data exposure risk has been reviewed.',
+      { records: guestApiSites.map((s: any) => ({ name: s.Name, detail: 'OptionsAllowGuestSupportApi = true' })) }
+    ));
+  }
+
+  const contentDeliveriesNoExpiry: any[] = (data as any).contentDeliveriesNoExpiry || [];
+  if (contentDeliveriesNoExpiry.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${contentDeliveriesNoExpiry.length} Public File Link${contentDeliveriesNoExpiry.length !== 1 ? 's' : ''} With No Expiry Date`,
+      'Content Deliveries create public URLs for files. Links with no expiry remain accessible permanently — anyone who discovers the URL can download the file indefinitely, even after the sharing intent is gone.',
+      'Review all Content Deliveries in Setup → Content Deliveries. Set an expiry date on links that should have a limited lifespan. Delete deliveries for files that should no longer be publicly accessible.',
+      { records: contentDeliveriesNoExpiry.slice(0, 30).map((d: any) => ({ name: d.Name || d.ContentDocumentId, detail: 'No expiry date — permanent public access' })) }
+    ));
+  }
+
+  // Apex @AuraEnabled no sharing keyword — implicit without sharing
+  const apexAuraNoSharing: any[] = ((data as any).apexAuraEnabledClasses || []).filter((c: any) => {
+    if (!c.Body) return false;
+    const match = c.Body.match(/\b(?:public|global|private)\s+(?:(with\s+sharing|without\s+sharing|inherited\s+sharing)\s+)?(?:virtual\s+|abstract\s+)?class\b/i);
+    return match && !match[1];
+  });
+  if (apexAuraNoSharing.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${apexAuraNoSharing.length} Apex Class${apexAuraNoSharing.length !== 1 ? 'es' : ''} With @AuraEnabled Methods and No Sharing Keyword Declared`,
+      'Apex classes with no sharing keyword behave as "without sharing" by default — record-level security is not enforced. This is a common source of unintended data exposure in Lightning components and Experience Cloud pages.',
+      'Add an explicit "with sharing" or "inherited sharing" declaration to each class. "inherited sharing" is the safest choice for utility classes as it enforces the sharing context of the caller.',
+      { records: apexAuraNoSharing.map((c: any) => ({ name: c.Name, detail: 'No sharing keyword — defaults to without sharing behaviour' })) }
     ));
   }
 
