@@ -702,12 +702,12 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
         "AND (PermissionsEdit = true OR PermissionsDelete = true) " +
         "AND SobjectType IN ('Lead', 'Opportunity', 'Case', 'Contract', 'Account', 'Contact', 'Order') LIMIT 200"
       ).catch(() => ({ records: [] })),
-      // Active portal users confirmed on live Experience Cloud sites (NetworkMember — not just portal-licensed users)
+      // Active portal users on live sites — subquery avoids polymorphic traversal on NetworkMember.MemberId
       safeQuery(conn,
         "SELECT COUNT(Id) cnt FROM NetworkMember " +
         "WHERE NetworkId IN (SELECT Id FROM Network WHERE Status IN ('Live', 'Active')) " +
-        "AND Member.IsActive = true " +
-        "AND Member.UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly')"
+        "AND MemberId IN (SELECT Id FROM User WHERE IsActive = true " +
+        "AND UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly'))"
       ).catch(() => ({ records: [{ cnt: 0 }] }))
     ]);
 
@@ -817,7 +817,8 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
            guestProfilesReportAccessRes,
            communityUsersWithSysAdminRes, selfRegNetworksRes,
            selfRegElevatedProfilesRes, portalUsersOnInternalProfilesRes,
-           globalAuraMarkupsRes, flexiPageNetworkCountsRes] = await Promise.all([
+           globalAuraMarkupsRes, flexiPageNetworkCountsRes,
+           externalApexAuraEnabledRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -903,8 +904,12 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       // FlexiPage count in guest-accessible Experience Cloud sites
       safeToolingQuery(conn,
         "SELECT NetworkId, COUNT(Id) FROM FlexiPage WHERE NetworkId != null GROUP BY NetworkId LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      // @AuraEnabled Apex classes — needed for no-sharing-keyword finding in assessExternalAccess
+      safeToolingQuery(conn,
+        "SELECT Id, Name, ApiVersion, Body FROM ApexClass " +
+        "WHERE NamespacePrefix = null AND Body LIKE '%@AuraEnabled%' LIMIT 500"
       ).catch(() => ({ records: [] }))
-    ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
       externalEntities: externalEntitiesRes.records || [],
@@ -929,7 +934,8 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       selfRegElevatedProfiles: selfRegElevatedProfilesRes.records || [],
       portalUsersOnInternalProfiles: portalUsersOnInternalProfilesRes.records || [],
       globalAuraMarkups: (globalAuraMarkupsRes.records || []).filter((r) => !r.AuraDefinitionBundle?.NamespacePrefix),
-      flexiPageNetworkCounts: (flexiPageNetworkCountsRes.records || []).map((r) => ({ networkId: r.NetworkId, count: r.expr0 }))
+      flexiPageNetworkCounts: (flexiPageNetworkCountsRes.records || []).map((r) => ({ networkId: r.NetworkId, count: r.expr0 })),
+      apexAuraEnabledClasses: externalApexAuraEnabledRes.records || []
     });
   } catch (err) {
     console.error('External access assessment error:', err);
