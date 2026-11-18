@@ -900,6 +900,26 @@ export function assessApexSharing(data: {
     ));
   }
 
+  // REST resource checks — require confirmed @Http verb for 85% accuracy
+  const restWithoutSharing: { name: string; id: string }[] = (data as any).restWithoutSharingClasses || [];
+  const restNoDeclaration: { name: string; id: string }[] = (data as any).restNoDeclarationClasses || [];
+  if (restWithoutSharing.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${restWithoutSharing.length} @RestResource Apex Class${restWithoutSharing.length !== 1 ? 'es' : ''} Declared "without sharing"`,
+      '@RestResource classes with callable HTTP methods declared "without sharing" bypass record-level security for every REST API caller — including unauthenticated callers on Experience Cloud guest sites if the endpoint is accessible without a session.',
+      'Add "with sharing" or "inherited sharing" to each class. If system-level data access is genuinely required, document the justification and restrict the endpoint with IP allowlisting or a Named Credential.',
+      { records: restWithoutSharing.map(c => ({ name: c.name, detail: 'without sharing — REST endpoint bypasses record-level security' })) }
+    ));
+  }
+  if (restNoDeclaration.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${restNoDeclaration.length} @RestResource Apex Class${restNoDeclaration.length !== 1 ? 'es' : ''} With No Sharing Keyword`,
+      'REST-callable Apex classes with no sharing declaration default to "without sharing" behaviour in many execution contexts, silently bypassing record-level security for API callers.',
+      'Add an explicit "with sharing" or "inherited sharing" declaration. "inherited sharing" is the safest choice — it enforces the sharing context of the caller while keeping the class reusable.',
+      { records: restNoDeclaration.map(c => ({ name: c.name, detail: 'No sharing keyword — defaults to without sharing for REST callers' })) }
+    ));
+  }
+
   return {
     category: CAT,
     score: calculateCategoryScore(findings),
@@ -1896,6 +1916,68 @@ export function assessExternalAccess(data: { guestProfiles: any[]; externalEntit
       'Content Deliveries create public URLs for files. Links with no expiry remain accessible permanently — anyone who discovers the URL can download the file indefinitely, even after the sharing intent is gone.',
       'Review all Content Deliveries in Setup → Content Deliveries. Set an expiry date on links that should have a limited lifespan. Delete deliveries for files that should no longer be publicly accessible.',
       { records: contentDeliveriesNoExpiry.slice(0, 30).map((d: any) => ({ name: d.Name || d.ContentDocumentId, detail: 'No expiry date — permanent public access' })) }
+    ));
+  }
+
+  // ── Experience Cloud structural access checks ─────────────────────────────────
+
+  // EC-1: Experience Cloud users with System Administrator profile
+  const communityUsersWithSysAdmin: any[] = (data as any).communityUsersWithSysAdmin || [];
+  if (communityUsersWithSysAdmin.length > 0) {
+    findings.push(createFinding(CAT, 'critical',
+      `${communityUsersWithSysAdmin.length} Experience Cloud User${communityUsersWithSysAdmin.length !== 1 ? 's' : ''} Assigned the System Administrator Profile`,
+      'Experience Cloud users on the System Administrator profile have unrestricted access to all org data, configuration, and setup. This bypasses every sharing and security control in the org and is almost always a misconfiguration.',
+      'Remove the System Administrator profile from all Experience Cloud users immediately. Assign the minimum required community profile. Audit what these users can currently access and review the audit trail for suspicious activity.',
+      { records: communityUsersWithSysAdmin.slice(0, 30).map((u: any) => ({ name: u.Username || u.Name, detail: `UserType: ${u.UserType} — System Administrator profile` })) }
+    ));
+  }
+
+  // EC-2: Self-registration enabled on live sites
+  const selfRegNetworks: any[] = (data as any).selfRegNetworks || [];
+  if (selfRegNetworks.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${selfRegNetworks.length} Live Experience Cloud Site${selfRegNetworks.length !== 1 ? 's' : ''} With Self-Registration Enabled`,
+      'Self-registration allows anyone on the internet to create an account and become an authenticated user. Without strict validation, approval workflows, and profile controls, self-registered users may gain access to data beyond what is intended.',
+      'Add reCAPTCHA, email domain restrictions, or an approval workflow. Confirm the self-registration Apex handler validates input. Verify the self-registration profile grants only the minimum necessary permissions and object access.',
+      { records: selfRegNetworks.map((n: any) => ({ name: n.Name, detail: `SelfRegProfileId: ${n.SelfRegProfileId || 'not set'}` })) }
+    ));
+  }
+
+  // EC-3: Self-registration profile with elevated system permissions
+  const selfRegElevatedProfiles: any[] = (data as any).selfRegElevatedProfiles || [];
+  if (selfRegElevatedProfiles.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${selfRegElevatedProfiles.length} Self-Registration Profile${selfRegElevatedProfiles.length !== 1 ? 's' : ''} Grant Elevated System Permissions to New Users`,
+      'Every user who self-registers on your Experience Cloud site immediately receives these permissions. Elevated permissions on the self-registration profile are a broad, automated access grant that cannot be reviewed on a per-user basis.',
+      'Remove View All Data, API Enabled, and Run Reports from self-registration profiles. The self-registration profile should grant only the minimum object and system permissions needed for the site\'s intended purpose.',
+      { records: selfRegElevatedProfiles.map((p: any) => ({
+        name: p.Name,
+        detail: [p.PermissionsViewAllData && 'ViewAllData', p.PermissionsApiEnabled && 'APIEnabled', p.PermissionsRunReports && 'RunReports', p.PermissionsExportReport && 'ExportReport'].filter(Boolean).join(', ')
+      })) }
+    ));
+  }
+
+  // EC-4: Portal/community users assigned to internal (Standard) profile type
+  const portalUsersOnInternalProfiles: any[] = (data as any).portalUsersOnInternalProfiles || [];
+  if (portalUsersOnInternalProfiles.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${portalUsersOnInternalProfiles.length} Portal/Community User${portalUsersOnInternalProfiles.length !== 1 ? 's' : ''} Assigned an Internal (Standard) Profile`,
+      'Portal and community users on a Standard profile type inherit internal user permissions — the same as your internal Salesforce users. These users gain access to internal apps, objects, and data that external users should never see.',
+      'Assign all portal and community users to a community-specific profile (Customer Community, Partner Community, or a custom minimal profile with UserType matching their license). Remove all Standard profile assignments from external user types.',
+      { records: portalUsersOnInternalProfiles.map((u: any) => ({ name: u.Name, detail: `UserType: ${u.UserType} — Profile: ${u.Profile?.Name || 'unknown'}` })) }
+    ));
+  }
+
+  // EC-5: Aura components marked access="global" with guest-accessible sites
+  const globalAuraMarkups: any[] = (data as any).globalAuraMarkups || [];
+  const flexiPageNetworkCounts: { networkId: string; count: number }[] = (data as any).flexiPageNetworkCounts || [];
+  const guestFlexiPageTotal = flexiPageNetworkCounts.reduce((sum, r) => sum + r.count, 0);
+  if (globalAuraMarkups.length > 0 && guestProfiles.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${globalAuraMarkups.length} Aura Component${globalAuraMarkups.length !== 1 ? 's' : ''} Marked access="global" on Org With Guest-Accessible Experience Cloud Sites`,
+      `Components with access="global" are eligible for use in Experience Builder and can be placed on pages accessible to unauthenticated visitors. This org has active guest-accessible sites${guestFlexiPageTotal > 0 ? ` with ${guestFlexiPageTotal} Experience Builder pages` : ''}. Any global-access component placed on those pages will execute — including its Apex controller calls — in the guest user context.`,
+      'Review each access="global" Aura component. Confirm whether it is used on a guest-accessible page. Verify that all backing @AuraEnabled Apex methods enforce sharing. If a component should not be guest-accessible, change access to "public" or "private".',
+      { records: globalAuraMarkups.map((m: any) => ({ name: m.AuraDefinitionBundle?.DeveloperName || m.AuraDefinitionBundleId, detail: 'access="global" — eligible for guest-accessible Experience Cloud pages' })) }
     ));
   }
 

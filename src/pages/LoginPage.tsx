@@ -83,6 +83,8 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Custom Sharing Reasons Have No Corresponding Active Apex Class', severity: 'low', rationale: 'Stale sharing reasons that serve no current purpose — zombie configuration.' },
     { title: 'Inherited Sharing Classes — Context Depends on Caller', severity: 'low', rationale: 'If invoked from a without-sharing class or system context, runs without sharing enforcement.' },
     { title: 'Active Custom Apex Triggers — Always System Context', severity: 'low', rationale: 'Triggers can\'t declare a sharing mode and always run in system context — scope should be explicitly reviewed.' },
+    { title: '@RestResource Apex Classes Declared "without sharing" — REST Endpoint Bypasses Record Security', severity: 'high', rationale: 'Requires both @RestResource and an @Http verb to confirm as a callable endpoint (~85% accuracy). Unauthenticated callers on guest sites get unrestricted data access.' },
+    { title: '@RestResource Apex Classes With No Sharing Keyword — Implicit without sharing for REST Callers', severity: 'medium', rationale: 'Requires both @RestResource and an @Http verb for accuracy. No sharing declaration defaults to without sharing — REST callers bypass record-level security.' },
   ],
   'Record Teams': [
     { title: 'Account Team Roles Grant Edit Access — Review Least Privilege', severity: 'medium', rationale: 'Team members typically need visibility into the account, not the ability to edit it — apply least privilege.' },
@@ -148,6 +150,11 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Active Sites With Guest User API Access Enabled', severity: 'high', rationale: 'Unauthenticated REST API calls are possible against the site — automated scraping without credentials is a viable attack vector.' },
     { title: 'Public File Links With No Expiry Date (Content Deliveries)', severity: 'high', rationale: 'Files remain publicly accessible indefinitely — anyone who discovers or is forwarded the URL can download them permanently.' },
     { title: 'Apex Classes With @AuraEnabled Methods and No Sharing Keyword Declared', severity: 'medium', rationale: 'No sharing keyword defaults to without sharing behaviour — record-level security is not enforced for Lightning component Apex calls.' },
+    { title: 'Experience Cloud Users Assigned the System Administrator Profile', severity: 'critical', rationale: 'EC users on the System Administrator profile bypass all sharing and security controls — almost always a misconfiguration requiring immediate remediation.' },
+    { title: 'Live Experience Cloud Sites With Self-Registration Enabled', severity: 'medium', rationale: 'Anyone can create an account; without domain restrictions or approval workflows, self-registered users may access unintended data.' },
+    { title: 'Self-Registration Profile Grants Elevated System Permissions (ViewAllData, API Enabled, Run Reports)', severity: 'high', rationale: 'Profile permissions checked directly on the Network.SelfRegProfileId row (~88% accuracy). Every self-registered user immediately receives these broad permissions.' },
+    { title: 'Portal/Community Users Assigned an Internal (Standard) Profile Type', severity: 'high', rationale: 'Standard profile type grants internal user privileges to external users — object and app access intended only for employees.' },
+    { title: 'Aura Components Marked access="global" With Active Guest-Accessible Experience Cloud Sites', severity: 'medium', rationale: 'Accuracy ~72% — cannot confirm placement on a guest page without reading FlexiPage XML; FlexiPage-per-network count provided as context. Global components can be added to guest pages in Experience Builder.' },
   ],
   'Flow & Automation Sharing': [
     { title: 'Screen Flows Set to System Context Without Sharing', severity: 'high', rationale: 'Every user who runs this flow bypasses record-level security — the default is user context for a reason.' },

@@ -449,6 +449,17 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       )
     );
 
+    // @RestResource classes with callable HTTP methods — must have both @RestResource and @Http verb
+    const restResourceClasses = classes.filter(c => {
+      const body = c.Body || '';
+      return /@RestResource\b/i.test(body) && /@Http(Get|Post|Put|Patch|Delete)\b/i.test(body);
+    });
+    const restWithoutSharing = restResourceClasses.filter(c => /\bwithout\s+sharing\b/i.test(c.Body || ''));
+    const restNoDeclaration = restResourceClasses.filter(c => {
+      const body = c.Body || '';
+      return !/@IsTest\b/i.test(body) && !/\bwith\s+sharing\b|\bwithout\s+sharing\b|\binherited\s+sharing\b/i.test(body);
+    });
+
     res.json({
       withoutSharingClasses: withoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       sharesCreatingClasses: createsShares.map(c => ({ name: c.Name, id: c.Id })),
@@ -461,7 +472,9 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       invocableNoDeclarationClasses: invocableNoDeclaration.map(c => ({ name: c.Name, id: c.Id })),
       batchWithoutSharingClasses: batchWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       schedulableWithoutSharingClasses: schedulableWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
-      apexTriggers: (triggersRes.records || []).map(t => ({ name: t.Name, id: t.Id }))
+      apexTriggers: (triggersRes.records || []).map(t => ({ name: t.Name, id: t.Id })),
+      restWithoutSharingClasses: restWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      restNoDeclarationClasses: restNoDeclaration.map(c => ({ name: c.Name, id: c.Id }))
     });
   } catch (err) {
     console.error('Apex sharing assessment error:', err);
@@ -773,7 +786,10 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
            portalRolesRes, partnerUsersByRoleRes,
            guestWritePiiObjectsRes, guestReadSensitiveObjectsRes,
            guestApiSitesRes, contentDeliveriesNoExpiryRes,
-           guestProfilesReportAccessRes] = await Promise.all([
+           guestProfilesReportAccessRes,
+           communityUsersWithSysAdminRes, selfRegNetworksRes,
+           selfRegElevatedProfilesRes, portalUsersOnInternalProfilesRes,
+           globalAuraMarkupsRes, flexiPageNetworkCountsRes] = await Promise.all([
       safeQuery(conn, "SELECT Id, Name FROM Profile WHERE UserType = 'Guest' LIMIT 10"),
       safeToolingQuery(conn,
         "SELECT QualifiedApiName, Label, ExternalSharingModel " +
@@ -825,6 +841,40 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       safeQuery(conn,
         "SELECT Id, Name, PermissionsRunReports, PermissionsExportReport FROM Profile " +
         "WHERE UserType = 'Guest' AND (PermissionsRunReports = true OR PermissionsExportReport = true) LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      // Experience Cloud users with System Administrator profile
+      safeQuery(conn,
+        "SELECT Id, Name, Username, UserType, Profile.Name FROM User " +
+        "WHERE IsActive = true AND Profile.Name = 'System Administrator' AND UserType != 'Standard' LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      // Self-registration enabled sites
+      safeQuery(conn,
+        "SELECT Id, Name, SelfRegProfileId FROM Network " +
+        "WHERE SelfRegistrationEnabled = true AND Status IN ('Live', 'Active') LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      // Self-registration profiles with elevated system permissions
+      safeQuery(conn,
+        "SELECT Id, Name, UserType, PermissionsApiEnabled, PermissionsViewAllData, PermissionsRunReports, PermissionsExportReport " +
+        "FROM Profile WHERE Id IN " +
+        "(SELECT SelfRegProfileId FROM Network WHERE SelfRegistrationEnabled = true AND Status IN ('Live', 'Active')) " +
+        "AND (PermissionsApiEnabled = true OR PermissionsViewAllData = true OR PermissionsRunReports = true) LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      // Portal/community users assigned to internal (Standard) profile type
+      safeQuery(conn,
+        "SELECT Id, Name, UserType, Profile.Name FROM User " +
+        "WHERE IsActive = true " +
+        "AND UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly') " +
+        "AND Profile.UserType = 'Standard' LIMIT 50"
+      ).catch(() => ({ records: [] })),
+      // Aura components with access="global" (eligible for guest Experience Cloud pages)
+      safeToolingQuery(conn,
+        "SELECT Id, AuraDefinitionBundleId, AuraDefinitionBundle.DeveloperName, Source " +
+        "FROM AuraDefinition WHERE DefType = 'COMPONENT' AND NamespacePrefix = null " +
+        "AND Source LIKE '%access=\"global\"%' LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      // FlexiPage count in guest-accessible Experience Cloud sites
+      safeToolingQuery(conn,
+        "SELECT NetworkId, COUNT(Id) FROM FlexiPage WHERE NetworkId != null GROUP BY NetworkId LIMIT 200"
       ).catch(() => ({ records: [] }))
     ]);
     res.json({
@@ -845,7 +895,13 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
       guestReadSensitiveObjects: guestReadSensitiveObjectsRes.records || [],
       guestApiSites: guestApiSitesRes.records || [],
       contentDeliveriesNoExpiry: contentDeliveriesNoExpiryRes.records || [],
-      guestProfilesReportAccess: guestProfilesReportAccessRes.records || []
+      guestProfilesReportAccess: guestProfilesReportAccessRes.records || [],
+      communityUsersWithSysAdmin: communityUsersWithSysAdminRes.records || [],
+      selfRegNetworks: selfRegNetworksRes.records || [],
+      selfRegElevatedProfiles: selfRegElevatedProfilesRes.records || [],
+      portalUsersOnInternalProfiles: portalUsersOnInternalProfilesRes.records || [],
+      globalAuraMarkups: (globalAuraMarkupsRes.records || []).filter((r) => !r.AuraDefinitionBundle?.NamespacePrefix),
+      flexiPageNetworkCounts: (flexiPageNetworkCountsRes.records || []).map((r) => ({ networkId: r.NetworkId, count: r.expr0 }))
     });
   } catch (err) {
     console.error('External access assessment error:', err);
