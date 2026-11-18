@@ -910,6 +910,7 @@ app.get('/api/assess/external-access', requireAuth, async (req, res) => {
         "SELECT Id, Name, ApiVersion, Body FROM ApexClass " +
         "WHERE NamespacePrefix = null AND Body LIKE '%@AuraEnabled%' LIMIT 500"
       ).catch(() => ({ records: [] }))
+    ]);
     res.json({
       guestProfiles: guestProfileRes.records || [],
       externalEntities: externalEntitiesRes.records || [],
