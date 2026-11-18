@@ -85,6 +85,7 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Active Custom Apex Triggers — Always System Context', severity: 'low', rationale: 'Triggers can\'t declare a sharing mode and always run in system context — scope should be explicitly reviewed.' },
     { title: '@RestResource Apex Classes Declared "without sharing" — REST Endpoint Bypasses Record Security', severity: 'high', rationale: 'Requires both @RestResource and an @Http verb to confirm as a callable endpoint (~85% accuracy). Unauthenticated callers on guest sites get unrestricted data access.' },
     { title: '@RestResource Apex Classes With No Sharing Keyword — Implicit without sharing for REST Callers', severity: 'medium', rationale: 'Requires both @RestResource and an @Http verb for accuracy. No sharing declaration defaults to without sharing — REST callers bypass record-level security.' },
+    { title: '@AuraEnabled Apex Classes With "inherited sharing" That Perform Data Operations — Sharing Context Depends on Caller', severity: 'medium', rationale: 'Requires @AuraEnabled + inherited sharing + confirmed SOQL/DML in the body (~78% accuracy). If called from a without-sharing context, portal users receive system-level data access.' },
   ],
   'Record Teams': [
     { title: 'Account Team Roles Grant Edit Access — Review Least Privilege', severity: 'medium', rationale: 'Team members typically need visibility into the account, not the ability to edit it — apply least privilege.' },
@@ -126,6 +127,9 @@ const CATEGORY_CHECKS: Record<string, CheckItem[]> = {
     { title: 'Guest User Profile Has "Manage External Users" Permission', severity: 'high', rationale: 'Unauthenticated visitors can create or modify Experience Cloud user accounts — an effective privilege escalation path.' },
     { title: 'Portal/Community User Profiles With "API Enabled" Permission', severity: 'medium', rationale: 'External users can bypass UI-level controls and access the Salesforce API directly, potentially extracting data at scale.' },
     { title: 'Apex Classes With @AuraEnabled Methods Declared "without sharing"', severity: 'high', rationale: 'Explicitly removes record-level security from Lightning component Apex calls — includes guest user context on Experience Cloud sites.' },
+    { title: 'Active Portal Users on Live Experience Cloud Sites Can Directly Invoke Without-Sharing @AuraEnabled Apex', severity: 'high', rationale: 'Confirmed via NetworkMember on live sites (~88% accuracy). Combines active portal presence with without-sharing @AuraEnabled Apex into a single direct-path finding.' },
+    { title: 'Portal/Community User Profiles Have Edit or Delete on Financial/Commercial Objects (Opportunity, Contract, Order, Lead)', severity: 'high', rationale: 'Direct ObjectPermissions query filtered for Edit/Delete only (~95% accuracy). External users with structural write access to these objects bypass sharing rules entirely.' },
+    { title: 'Portal/Community User Profiles Have Edit or Delete on Core CRM Objects (Account, Contact, Case)', severity: 'medium', rationale: 'Edit/Delete ObjectPermissions on portal profile UserTypes (~88% accuracy). Case creation excluded; Edit/Delete on CRM objects is rarely intentional for external users.' },
   ],
   'Implicit Sharing': [
     { title: 'Contact Visibility Controlled by Account — Implicit Sharing Active', severity: 'medium', rationale: 'Account access automatically exposes all related Contacts — Account-level sharing changes ripple to Contacts.' },

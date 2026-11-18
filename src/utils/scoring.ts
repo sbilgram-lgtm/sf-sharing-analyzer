@@ -900,6 +900,17 @@ export function assessApexSharing(data: {
     ));
   }
 
+  // Gap 2: @AuraEnabled + inherited sharing + confirmed data operations (~78% accuracy)
+  const auraInheritedSharing: { name: string; id: string }[] = (data as any).auraEnabledInheritedSharingClasses || [];
+  if (auraInheritedSharing.length > 0) {
+    findings.push(createFinding(CAT, 'medium',
+      `${auraInheritedSharing.length} @AuraEnabled Apex Class${auraInheritedSharing.length !== 1 ? 'es' : ''} With "inherited sharing" Perform Data Operations — Sharing Context Depends on Caller`,
+      '"inherited sharing" means the class runs with whatever sharing mode called it. When invoked directly from a Lightning component on an Experience Cloud page the sharing context is typically the user\'s — but if any part of the call chain is "without sharing" (another Apex class, a batch, or a trigger), sharing enforcement is silently removed. The presence of SOQL or DML in the body confirms the class handles real data, not just logic. Requires @AuraEnabled annotation and confirmed data operations in the class body (~78% accuracy).',
+      'Replace "inherited sharing" with "with sharing" on all @AuraEnabled classes unless system-level access is explicitly documented and justified. This makes sharing enforcement unconditional regardless of how the class is invoked. If a specific method genuinely requires system context, extract it into a separate class rather than relaxing the whole controller.',
+      { records: auraInheritedSharing.map(c => ({ name: c.name, detail: 'inherited sharing + @AuraEnabled + data operations — sharing depends on call chain' })) }
+    ));
+  }
+
   // REST resource checks — require confirmed @Http verb for 85% accuracy
   const restWithoutSharing: { name: string; id: string }[] = (data as any).restWithoutSharingClasses || [];
   const restNoDeclaration: { name: string; id: string }[] = (data as any).restNoDeclarationClasses || [];
@@ -1601,6 +1612,40 @@ export function assessPermissionBypasses(data: {
       'Apex classes explicitly declared "without sharing" ignore record-level security entirely. @AuraEnabled methods on these classes can return records that the calling user — including a guest user on an Experience Cloud site — should not have access to.',
       'Add "with sharing" to these Apex classes or switch to "inherited sharing". Audit each @AuraEnabled method to confirm it only returns data the user is authorised to see.',
       { records: withoutSharingAura.map((c: any) => ({ name: c.Name, detail: 'without sharing — @AuraEnabled methods bypass record-level security' })) }
+    ));
+  }
+
+  // Gap 3: Confirmed portal NetworkMember count + without-sharing @AuraEnabled — direct invocation path (~88%)
+  const activePortalNetworkMembers: number = (data as any).activePortalNetworkMembers || 0;
+  if (activePortalNetworkMembers > 0 && withoutSharingAura.length > 0) {
+    findings.push(createFinding(CAT, 'high',
+      `${activePortalNetworkMembers.toLocaleString()} Active Portal Users on Live Experience Cloud Sites Can Directly Invoke ${withoutSharingAura.length} Without-Sharing @AuraEnabled Apex Class${withoutSharingAura.length !== 1 ? 'es' : ''}`,
+      'Portal users are confirmed as active members of live Experience Cloud sites (via NetworkMember). These @AuraEnabled Apex classes are callable from Lightning components on those sites, and each class bypasses record-level security. A portal user invoking one of these controllers gets system-level data access, unrestricted by their profile, permission sets, or sharing rules — regardless of object-level OWD or sharing rules.',
+      'Prioritize remediating each @AuraEnabled class that is "without sharing". Add "with sharing" or "inherited sharing" to the class declaration. Consider adding an explicit UserType check at the start of sensitive methods to reject portal user calls that should not reach that logic.',
+      { records: withoutSharingAura.map((c: any) => ({ name: c.Name, detail: 'without sharing — directly invocable from confirmed active portal user Lightning components' })) }
+    ));
+  }
+
+  // Gap 1: Portal profile CRUD on sensitive objects — Edit/Delete only (~92% accuracy)
+  const portalCrudObjects: any[] = (data as any).portalProfileCrudObjects || [];
+  const portalCrudHighRisk = portalCrudObjects.filter((r: any) => ['Opportunity', 'Contract', 'Order', 'Lead'].includes(r.SobjectType));
+  const portalCrudMediumRisk = portalCrudObjects.filter((r: any) => ['Account', 'Contact', 'Case'].includes(r.SobjectType));
+  if (portalCrudHighRisk.length > 0) {
+    const objects = [...new Set(portalCrudHighRisk.map((r: any) => r.SobjectType))].join(', ');
+    findings.push(createFinding(CAT, 'high',
+      `Portal/Community User Profiles Have Edit or Delete Permissions on Financial/Commercial Objects (${objects})`,
+      'Portal profiles have direct object-level Edit or Delete permissions on records that external users should almost never be able to modify. This grants structural write access that is independent of sharing rules — an Aura component, API call, or any code running in the portal user\'s context can create or change these records directly.',
+      'Remove Edit and Delete permissions from portal profiles on Opportunity, Contract, Order, and Lead. If view access is needed, use read-only object permissions or Sharing Sets. Document any exception and confirm it is reflected in your security design.',
+      { records: portalCrudHighRisk.map((r: any) => ({ name: r.Parent?.Profile?.Name || 'Unknown Profile', detail: `${r.SobjectType} — ${[r.PermissionsEdit && 'Edit', r.PermissionsDelete && 'Delete'].filter(Boolean).join('/')} (${r.Parent?.Profile?.UserType})` })) }
+    ));
+  }
+  if (portalCrudMediumRisk.length > 0) {
+    const objects = [...new Set(portalCrudMediumRisk.map((r: any) => r.SobjectType))].join(', ');
+    findings.push(createFinding(CAT, 'medium',
+      `Portal/Community User Profiles Have Edit or Delete Permissions on Core CRM Objects (${objects})`,
+      'Edit or Delete on Account, Contact, or Case may be intentional for self-service scenarios, but grants structural write access to core CRM data for all users on this profile. Combined with any @AuraEnabled without-sharing Apex accessible from an Experience Cloud page, portal users can modify records beyond their intended scope.',
+      'Review each profile and confirm the Edit/Delete grant is intentional and scoped correctly. If access is only needed for self-owned records, remove the object permission and enforce access through Sharing Sets instead — they provide the same access path with explicit field-matching constraints.',
+      { records: portalCrudMediumRisk.map((r: any) => ({ name: r.Parent?.Profile?.Name || 'Unknown Profile', detail: `${r.SobjectType} — ${[r.PermissionsEdit && 'Edit', r.PermissionsDelete && 'Delete'].filter(Boolean).join('/')} (${r.Parent?.Profile?.UserType})` })) }
     ));
   }
 

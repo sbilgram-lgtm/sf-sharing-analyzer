@@ -422,6 +422,14 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
 
     const inheritedSharingClasses = classes.filter(c => /\binherited\s+sharing\b/i.test(c.Body || ''));
     const auraEnabledWithoutSharing = withoutSharing.filter(c => /@AuraEnabled\b/i.test(c.Body || ''));
+    // @AuraEnabled + inherited sharing + confirmed data operations — sharing context depends on call chain (~78% accuracy)
+    const auraEnabledInheritedSharing = inheritedSharingClasses.filter(c => {
+      const body = c.Body || '';
+      return /@AuraEnabled\b/i.test(body) &&
+        (/\bSELECT\b.*\bFROM\b/i.test(body) ||
+         /\bDatabase\.(insert|update|delete|upsert|query)\b/i.test(body) ||
+         /\b(insert|update|delete|upsert)\s+\w/i.test(body));
+    });
     const allInvocable = classes.filter(c => /@InvocableMethod\b/i.test(c.Body || ''));
     const invocableWithoutSharing = allInvocable.filter(c => /\bwithout\s+sharing\b/i.test(c.Body || ''));
     const invocableNoDeclaration = allInvocable.filter(c => {
@@ -468,6 +476,7 @@ app.get('/api/assess/apex-sharing', requireAuth, async (req, res) => {
       apexShareVolumes: shareVolumeResults,
       inheritedSharingClasses: inheritedSharingClasses.map(c => ({ name: c.Name, id: c.Id })),
       auraEnabledWithoutSharingClasses: auraEnabledWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
+      auraEnabledInheritedSharingClasses: auraEnabledInheritedSharing.map(c => ({ name: c.Name, id: c.Id })),
       invocableWithoutSharingClasses: invocableWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
       invocableNoDeclarationClasses: invocableNoDeclaration.map(c => ({ name: c.Name, id: c.Id })),
       batchWithoutSharingClasses: batchWithoutSharing.map(c => ({ name: c.Name, id: c.Id })),
@@ -584,7 +593,8 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       psViewAllRes, psModifyAllRes,
       guestProfilesAllDataRes, guestProfilesApiEnabledRes,
       guestProfilesManageExtUsersRes, portalProfilesApiEnabledRes,
-      apexAuraEnabledRes
+      apexAuraEnabledRes,
+      portalProfileCrudObjectsRes, activePortalNetworkMembersRes
     ] = await Promise.all([
       safeQuery(conn,
         "SELECT Id, Name, UserType, LastLoginDate, Profile.Name FROM User " +
@@ -682,7 +692,23 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       safeToolingQuery(conn,
         "SELECT Id, Name, ApiVersion, Body FROM ApexClass " +
         "WHERE NamespacePrefix = null AND Body LIKE '%@AuraEnabled%' LIMIT 500"
-      ).catch(() => ({ records: [] }))
+      ).catch(() => ({ records: [] })),
+      // Portal profile CRUD on sensitive objects — Edit/Delete only (Create excluded as often intentional self-service)
+      safeToolingQuery(conn,
+        "SELECT SobjectType, PermissionsCreate, PermissionsEdit, PermissionsDelete, " +
+        "Parent.Profile.Name, Parent.Profile.UserType " +
+        "FROM ObjectPermissions WHERE Parent.IsOwnedByProfile = true " +
+        "AND Parent.Profile.UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly') " +
+        "AND (PermissionsEdit = true OR PermissionsDelete = true) " +
+        "AND SobjectType IN ('Lead', 'Opportunity', 'Case', 'Contract', 'Account', 'Contact', 'Order') LIMIT 200"
+      ).catch(() => ({ records: [] })),
+      // Active portal users confirmed on live Experience Cloud sites (NetworkMember — not just portal-licensed users)
+      safeQuery(conn,
+        "SELECT COUNT(Id) cnt FROM NetworkMember " +
+        "WHERE NetworkId IN (SELECT Id FROM Network WHERE Status IN ('Live', 'Active')) " +
+        "AND Member.IsActive = true " +
+        "AND Member.UserType IN ('PowerCustomerSuccess', 'PowerPartner', 'CustomerSuccess', 'CsnOnly')"
+      ).catch(() => ({ records: [{ cnt: 0 }] }))
     ]);
 
     const vadUserMap = new Map();
@@ -749,7 +775,9 @@ app.get('/api/assess/permission-bypasses', requireAuth, async (req, res) => {
       guestProfilesApiEnabled: guestProfilesApiEnabledRes.records || [],
       guestProfilesManageExtUsers: guestProfilesManageExtUsersRes.records || [],
       portalProfilesApiEnabled: portalProfilesApiEnabledRes.records || [],
-      apexAuraEnabledClasses: apexAuraEnabledRes.records || []
+      apexAuraEnabledClasses: apexAuraEnabledRes.records || [],
+      portalProfileCrudObjects: portalProfileCrudObjectsRes.records || [],
+      activePortalNetworkMembers: (activePortalNetworkMembersRes.records[0] || {}).cnt || 0
     });
   } catch (err) {
     console.error('Permission bypasses assessment error:', err);
